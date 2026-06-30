@@ -1,0 +1,28 @@
+{
+    "FileVersion": 3,
+    "Version": 1,
+    "VersionName": "1.0",
+    "FriendlyName": "PartyInput",
+    "Description": "Routes 16 buttons from a custom USB HID joystick through Unreal Enhanced Input to a single indexed dispatch. The handoff point — HandleButtonPressed(int32 PlayerIndex) — is where game logic begins.",
+    "Category": "Input",
+    "CreatedBy": "Andrew Black",
+    "CreatedByURL": "",
+    "DocsURL": "",
+    "MarketplaceURL": "",
+    "SupportURL": "",
+    "CanContainContent": false,
+    "IsBetaVersion": false,
+    "IsExperimentalVersion": false,
+    "Installed": false,
+    "Modules": [
+        {
+            "Name": "PartyInput",
+            "Type": "Runtime",
+            "LoadingPhase": "Default"
+        }
+    ],
+    "Plugins": [
+        { "Name": "EnhancedInput", "Enabled": true },
+        { "Name": "RawInput",      "Enabled": true }
+    ]
+}

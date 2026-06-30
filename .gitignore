@@ -1,0 +1,35 @@
+# Unreal Engine generated
+Game/Binaries/
+Game/Build/
+Game/DerivedDataCache/
+Game/Intermediate/
+Game/Saved/
+Game/**/.vs/
+Game/**/.idea/
+Game/**/Binaries/
+Game/**/Intermediate/
+
+# Visual Studio
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+.vs/
+
+# Rider
+.idea/
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Compiled output
+*.o
+*.obj
+*.hex
+
+# Teensy / Arduino build artifacts
+Firmware/.pio/
+Firmware/build/
