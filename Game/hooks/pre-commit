@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# pre-commit — fast, deterministic checks. Latency budget: <2s.
+#
+# Heavy verification (build, tests) belongs in a check script, not here.
+# This hook only rejects obvious mistakes that are cheap to detect.
+#
+# Checks:
+#   1. Filename lint        — no spaces; allowed chars match [A-Za-z0-9._/-].
+#   2. Forbidden extensions — no .exe/.pdb/.obj/.ilk/.pch staged.
+#   3. LFS-pattern bypass   — files matching LFS patterns from .gitattributes
+#                             must actually be staged as LFS pointers.
+
+set -u
+
+fail=0
+err() { echo "pre-commit: error: $*" >&2; fail=1; }
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# Staged files (added/copied/modified/renamed). Use -z for safe newline handling.
+mapfile -d '' STAGED < <(git diff --cached --name-only --diff-filter=ACMR -z)
+if [ "${#STAGED[@]}" -eq 0 ]; then
+  exit 0
+fi
+
+# --- Check 1: filename lint -------------------------------------------------
+for path in "${STAGED[@]}"; do
+  case "$path" in
+    *' '*) err "filename contains space: '$path'" ;;
+  esac
+  # Allowed character set check. Disallow anything outside the safe set.
+  if printf '%s' "$path" | LC_ALL=C grep -qE '[^A-Za-z0-9._/\-]'; then
+    err "filename has disallowed characters (allowed: A-Z a-z 0-9 . _ / -): '$path'"
+  fi
+done
+
+# --- Check 2: forbidden extensions ------------------------------------------
+for path in "${STAGED[@]}"; do
+  case "${path##*.}" in
+    exe|pdb|obj|ilk|pch)
+      err "build artifact must not be committed: '$path'" ;;
+  esac
+done
+
+# --- Check 3: LFS-pattern bypass --------------------------------------------
+# Read LFS patterns from .gitattributes (only the basic "filter=lfs" lines).
+mapfile -t LFS_PATTERNS < <(
+  grep -E 'filter=lfs' "$REPO_ROOT/.gitattributes" 2>/dev/null \
+    | awk '{print $1}'
+)
+
+if [ "${#LFS_PATTERNS[@]}" -gt 0 ]; then
+  # Pointer files begin with this literal magic header.
+  LFS_HEADER='version https://git-lfs.github.com/spec/'
+
+  for path in "${STAGED[@]}"; do
+    matches_lfs=0
+    for pat in "${LFS_PATTERNS[@]}"; do
+      # Convert simple gitattributes pattern to shell glob. Most are either
+      # `*.ext` or `dir/**` — both work as-is with bash `case` when we strip
+      # the trailing `**` into `*`.
+      sh_pat="${pat//\*\*/\*}"
+      # shellcheck disable=SC2254  # intentional dynamic case pattern
+      case "$path" in
+        $sh_pat) matches_lfs=1; break ;;
+      esac
+    done
+    [ "$matches_lfs" -eq 1 ] || continue
+
+    # Read first ~64 bytes of the staged content and look for the LFS magic.
+    head_bytes="$(git show ":$path" 2>/dev/null | head -c 64)"
+    case "$head_bytes" in
+      "$LFS_HEADER"*) ;; # OK, real LFS pointer
+      *) err "LFS-pattern file staged as raw binary (not an LFS pointer): '$path' (run: git lfs install && git add)" ;;
+    esac
+  done
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo "pre-commit: rejected. To bypass *only after addressing the warnings*, retry with --no-verify (not recommended)." >&2
+  exit 1
+fi
+
+exit 0
