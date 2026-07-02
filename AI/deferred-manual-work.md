@@ -61,7 +61,19 @@ auto-maps device buttons, Enhanced-Input compatible. Removes the need for the
 
 ---
 
-## 6. Optional: enable serial debug output
+## 7. Add physical "main button" (button 17) to the Teensy
+
+**Requires:** Physical main button wired to a new digital input on the Teensy.
+
+**Instruction:** Wire a new big red button (the host/MC control) to an unused digital pin.
+In `Firmware/PartyButtons.ino`, add a 17th button call alongside the 16 player buttons:
+`Joystick.button(17, ...)`. This exposes `GenericUSBController_Button17` to RawInput,
+which maps to `MainButtonAction` in `APartyInputController::BuildButtonInputs()`.
+Until this is done, the main button only works via the keyboard **Enter** key (dev emulation).
+
+---
+
+## 9. Optional: enable serial debug output
 
 **Instruction:** In `Firmware/PartyButtons.ino`, change `#define SERIAL_DEBUG 0` to `1`,
 change Tools → USB Type = "Serial + Joystick", re-flash, open the Serial Monitor at

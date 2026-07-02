@@ -9,17 +9,19 @@
 
 // FInputActionInstance is declared in EnhancedPlayerInput.h
 #include "EnhancedPlayerInput.h"
+#include "TimerManager.h"
 
 // ---- Keyboard emulation key table -----------------------------------------
 
 /*static*/ const TArray<FKey>& APartyInputController::GetKeyboardEmulationKeys()
 {
-    // Buttons 1–16 mapped to: a w s e d r f g h j i k o l p ;
+    // Buttons 1–8:  a s d f j k l ;
+    // Buttons 9–16: e r t g h u i o
     static const TArray<FKey> Keys = {
-        EKeys::A, EKeys::W, EKeys::S, EKeys::E,
-        EKeys::D, EKeys::R, EKeys::F, EKeys::G,
-        EKeys::H, EKeys::U, EKeys::J, EKeys::I,
-        EKeys::K, EKeys::O, EKeys::L, EKeys::P,
+        EKeys::A,         EKeys::S,         EKeys::D,         EKeys::F,
+        EKeys::J,         EKeys::K,         EKeys::L,         EKeys::Semicolon,
+        EKeys::E,         EKeys::R,         EKeys::T,         EKeys::G,
+        EKeys::H,         EKeys::U,         EKeys::I,         EKeys::O,
     };
     return Keys;
 }
@@ -28,8 +30,9 @@
 
 void APartyInputController::BuildButtonInputs()
 {
-    // Skip if already populated (e.g., by designer-assigned asset properties).
-    if (ButtonActions.Num() == NUM_BUTTONS && ButtonMappingContext != nullptr)
+    // Skip if already fully populated (e.g., by designer-assigned asset properties).
+    // Main button is included in the skip guard: if all three are set, skip entirely.
+    if (ButtonActions.Num() == NUM_BUTTONS && ButtonMappingContext != nullptr && MainButtonAction != nullptr)
     {
         return;
     }
@@ -45,6 +48,16 @@ void APartyInputController::BuildButtonInputs()
         ButtonActions.Add(IA);
     }
 
+    // Build the 17th "main button" action — host/MC control, NOT in ButtonActions.
+    // This preserves the 16-player invariant: GetButtonCount() and ResolveActionIndex
+    // operate only on ButtonActions and are completely unaffected by this action.
+    if (MainButtonAction == nullptr)
+    {
+        UInputAction* MainIA = NewObject<UInputAction>(Outer, NAME_None, RF_Transient);
+        MainIA->ValueType = EInputActionValueType::Boolean;
+        MainButtonAction = MainIA;
+    }
+
     // Build the mapping context.
     UInputMappingContext* IMC = NewObject<UInputMappingContext>(Outer, NAME_None, RF_Transient);
 
@@ -56,6 +69,11 @@ void APartyInputController::BuildButtonInputs()
         IMC->MapKey(ButtonActions[i].Get(), FKey(KeyName));
     }
 
+    // Main button: GenericUSBController_Button17.
+    // NOTE: physical Button17 requires a Teensy firmware update. Until then, only
+    // the dev keyboard mapping (Enter) works. See AI/deferred-manual-work.md.
+    IMC->MapKey(MainButtonAction.Get(), FKey(TEXT("GenericUSBController_Button17")));
+
     // Dev emulation: also map keyboard keys so each button can be exercised
     // without the physical Teensy hardware. Both mappings fire the same action.
     if (bEnableKeyboardEmulation)
@@ -65,14 +83,17 @@ void APartyInputController::BuildButtonInputs()
         {
             IMC->MapKey(ButtonActions[i].Get(), EmulKeys[i]);
         }
+
+        // Main button dev key: Enter (go back = long-press, activate = tap).
+        IMC->MapKey(MainButtonAction.Get(), EKeys::Enter);
     }
 
     ButtonMappingContext = IMC;
 
     UE_LOG(LogPartyInput, Log,
-        TEXT("PartyInputController: built %d actions + IMC at runtime%s."),
+        TEXT("PartyInputController: built %d player actions + 1 main button action + IMC at runtime%s."),
         NUM_BUTTONS,
-        bEnableKeyboardEmulation ? TEXT(" (+ keyboard emulation: awsedrfghujikolp)") : TEXT(""));
+        bEnableKeyboardEmulation ? TEXT(" (+ keyboard emulation: asdfkjl;ertghuio + Enter)") : TEXT(""));
 }
 
 // ---- Lifecycle ------------------------------------------------------------
@@ -124,12 +145,24 @@ void APartyInputController::SetupInputComponent()
     {
         if (Action)
         {
-            EIC->BindAction(Action, ETriggerEvent::Started, this,
+            EIC->BindAction(Action, ETriggerEvent::Started,   this,
                             &APartyInputController::OnAnyButton);
+            EIC->BindAction(Action, ETriggerEvent::Completed, this,
+                            &APartyInputController::OnAnyButtonReleased);
         }
     }
 
-    UE_LOG(LogPartyInput, Log, TEXT("PartyInputController: bound %d actions."), ButtonActions.Num());
+    // Bind the main button to its own Started/Completed pair for tap-vs-hold classification.
+    // Never routes through OnAnyButton — the main button has no PlayerIndex.
+    if (MainButtonAction)
+    {
+        EIC->BindAction(MainButtonAction, ETriggerEvent::Started,   this,
+                        &APartyInputController::OnMainButtonStarted);
+        EIC->BindAction(MainButtonAction, ETriggerEvent::Completed, this,
+                        &APartyInputController::OnMainButtonCompleted);
+    }
+
+    UE_LOG(LogPartyInput, Log, TEXT("PartyInputController: bound %d player actions + main button."), ButtonActions.Num());
 }
 
 // ---- Dispatch -------------------------------------------------------------
@@ -149,13 +182,70 @@ void APartyInputController::OnAnyButton(const FInputActionInstance& Instance)
     }
 }
 
+void APartyInputController::OnAnyButtonReleased(const FInputActionInstance& Instance)
+{
+    const UInputAction* Src = Instance.GetSourceAction();
+    const int32 Index = ResolveActionIndex(Src);
+    if (Index != INDEX_NONE)
+    {
+        HandleButtonReleased(Index);
+    }
+}
+
 void APartyInputController::HandleButtonPressed(int32 PlayerIndex)
 {
-    // PlayerIndex 0 => player 1 / button 1, etc.
     UE_LOG(LogPartyInput, Log, TEXT("Party button pressed: player %d"), PlayerIndex + 1);
-
-    // Broadcast so HUD, GameMode, and other observers can react.
     OnButtonPressed.Broadcast(PlayerIndex);
+}
 
-    // TODO (game owner): route this press to player PlayerIndex.
+void APartyInputController::HandleButtonReleased(int32 PlayerIndex)
+{
+    UE_LOG(LogPartyInput, Log, TEXT("Party button released: player %d"), PlayerIndex + 1);
+    OnButtonReleased.Broadcast(PlayerIndex);
+}
+
+// ---- Main button (tap vs long-press) -------------------------------------
+
+void APartyInputController::OnMainButtonStarted(const FInputActionInstance& /*Instance*/)
+{
+    // Record the time and start the hold timer. If it fires before release, that's a hold.
+    bMainHoldFired = false;
+    MainButtonPressTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+
+    GetWorldTimerManager().SetTimer(
+        MainHoldTimerHandle,
+        this,
+        &APartyInputController::OnMainHoldTimerFired,
+        MainButtonHoldThreshold,
+        /*bLooping=*/false);
+}
+
+void APartyInputController::OnMainButtonCompleted(const FInputActionInstance& /*Instance*/)
+{
+    // Cancel the hold timer — if it hasn't fired, this is a tap.
+    GetWorldTimerManager().ClearTimer(MainHoldTimerHandle);
+
+    if (!bMainHoldFired)
+    {
+        HandleMainButtonTapped();
+    }
+    // If bMainHoldFired is true, HandleMainButtonHeld() was already called by the timer.
+}
+
+void APartyInputController::OnMainHoldTimerFired()
+{
+    bMainHoldFired = true;
+    HandleMainButtonHeld();
+}
+
+void APartyInputController::HandleMainButtonTapped()
+{
+    UE_LOG(LogPartyInput, Log, TEXT("Main button tapped (activate/confirm)."));
+    OnMainButtonTapped.Broadcast();
+}
+
+void APartyInputController::HandleMainButtonHeld()
+{
+    UE_LOG(LogPartyInput, Log, TEXT("Main button held (back/up)."));
+    OnMainButtonHeld.Broadcast();
 }

@@ -89,6 +89,75 @@ Physical button N pressed
 
 ---
 
+## Game flow & player model (extended — added with map-flow scaffold)
+
+### Load-bearing game concepts (encode these, never violate them)
+
+- **16 big red arcade buttons = 16 players.** Every physical button is permanently
+  assigned to one player (button N = player N). `PlayerIndex` is 0-based.
+- **One PlayerController, fan-out by index.** Never create 16 `ULocalPlayer`s.
+  `PlayerIndex` is a dispatch index, not an engine local player.
+- **A 17th "main button"** (the host/MC control) sits outside the 16-player set.
+  Dev key: **Enter**. Physical: `GenericUSBController_Button17` (requires Teensy firmware update).
+  Tap = activate/confirm selected menu option. Long-press (≥0.6s) = go back.
+- **"Player registered"** means the player pressed their button during the Lobby
+  countdown window. Registration is per-session and cleared on reset.
+
+### Phase map flow
+
+```
+L_Main (startup)
+  → L_MainMenu  (Play / Settings)
+       → L_Settings (stub)
+       → L_Lobby (players join via 1s countdown)
+            → L_LevelSelect (Roulette Rush — picks the next minigame)
+                 → L_GameA..L_GameP (minigame map)
+                      → back to L_LevelSelect (or L_Results if session complete)
+  → L_Results (leaderboard)
+       → L_MainMenu
+```
+
+Session ends when `GamesPlayed >= GamesPerSession` (default 10, configurable).
+
+### Architecture layers
+
+| Layer | Component | Survives map travel? |
+|---|---|---|
+| Input dispatch | `APartyInputController` (plugin) | Yes — per-world but rebuilt the same |
+| Session data | `FPartySessionState` in `UPartySessionSubsystem` | **Yes** — GameInstance subsystem |
+| Phase logic | `APartyGameModeBase` subclasses (one per phase/map) | No — torn down on travel |
+| Routing | `PartyFlow::GetRoute(EPartyPhase)` (namespace, code only) | N/A |
+| Rendering | `APartyFlowHUD` (single HUD, phase-switches draw logic) | No — rebuilt each map |
+
+### Travel wiring
+
+Map travel uses `UGameplayStatics::OpenLevel(world, MapName, true, "?game=...")`.
+The `?game=` option uses the **reflected class name** (no `A` prefix):
+- `APartyLobbyGameMode` → `"?game=/Script/PartyButtons.PartyLobbyGameMode"`
+- Getting this wrong silently falls back to `GlobalDefaultGameMode` with no error.
+
+Phase is always written to the subsystem **before** `OpenLevel` so the destination
+HUD's first `DrawHUD` reads the correct phase immediately. All travel calls are
+deferred one tick (via `SetTimerForNextTick`) to avoid calling `OpenLevel` from
+inside `BeginPlay` or a delegate handler.
+
+### New files (added with map-flow scaffold)
+
+| File | Role |
+|---|---|
+| `Game/Source/PartyButtons/Public/PartyTypes.h` | `EPartyPhase`, `FPartyGameInfo`, `FPartyPhaseRoute` |
+| `Game/Source/PartyButtons/Public/PartySessionState.h` + `Private/` | Pure world-free data model; all testable logic |
+| `Game/Source/PartyButtons/Public/PartySessionSubsystem.h` + `Private/` | `UGameInstanceSubsystem` persistence wrapper |
+| `Game/Source/PartyButtons/Public/PartyFlowRouter.h` + `Private/` | Central `PartyFlow::GetRoute(EPartyPhase)` routing table |
+| `Game/Source/PartyButtons/Public/PartyGameModeBase.h` + `Private/` | Abstract base; delegate binding; travel helpers |
+| `Game/Source/PartyButtons/Public/PartyMain/MainMenu/Settings/Lobby/LevelSelect/Minigame/ResultsGameMode.h` | One phase GameMode each |
+| `Game/Source/PartyButtons/Public/PartyFlowHUD.h` + `Private/` | Single phase-switching canvas HUD |
+| `Plugins/PartyInput/Source/PartyInput/Private/Tests/PartyInputMainButtonTest.cpp` | Plugin tests: main button invariant, mappings, tap/hold |
+| `Game/Source/PartyButtons/Private/Tests/PartySessionStateTest.cpp` | Session state + roster unit tests |
+| `Game/Source/PartyButtons/Private/Tests/PartyFlowRouterTest.cpp` | Routing table tests (incl. class-path pitfall guard) |
+
+---
+
 ## Alternatives considered and rejected
 
 | Alternative | Rejected because |
