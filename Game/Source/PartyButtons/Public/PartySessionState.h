@@ -62,6 +62,14 @@ struct PARTYBUTTONS_API FPartySessionState
     UPROPERTY()
     TArray<int32> WinCounts;
 
+    /**
+     * Number of AI-controlled players the dev has configured for this session,
+     * via the Lobby's dev-only Up/Down control. AI slots are DERIVED (see
+     * ComputeAISlots), never stored as an index set — this is just the target count.
+     */
+    UPROPERTY()
+    int32 NumAIPlayers = 0;
+
     /** Number of minigames completed so far this session. */
     UPROPERTY()
     int32 GamesPlayed = 0;
@@ -124,6 +132,33 @@ struct PARTYBUTTONS_API FPartySessionState
 
     /** True when GamesPlayed >= GamesPerSession. */
     bool IsSessionComplete() const;
+
+    // -----------------------------------------------------------------------
+    // AI players (dev-only testing aid — Lobby Up/Down control)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Given which of the 16 slots are already claimed by a real human, and a
+     * target AI count, compute which slots would be AI-controlled: scan index
+     * 15 down to 0, skipping any already-claimed slot, marking up to NumAI of
+     * the remaining slots as AI. A real human claim always wins — this single
+     * function is what makes "AI fills in reverse order" and "player intent
+     * wins" fall out with no special-casing, for BOTH callers:
+     *   - the live Lobby HUD (ClaimedByHuman = currently-held buttons), and
+     *   - the final roster after registration (ClaimedByHuman = RegisteredPlayers).
+     * OutIsAI is resized to NUM_PLAYERS and fully overwritten.
+     */
+    static void ComputeAISlots(const TArray<bool>& ClaimedByHuman, int32 NumAI, TArray<bool>& OutIsAI);
+
+    /** True if PlayerIndex is currently AI-controlled, given RegisteredPlayers + NumAIPlayers. */
+    bool IsSlotAI(int32 PlayerIndex) const;
+
+    /** Registered humans + AI slots (deduplicated) — how many pawns a minigame should spawn. */
+    int32 GetActiveParticipantCount() const;
+
+    /** Adjust NumAIPlayers by one, clamped to [0, NUM_PLAYERS]. Not capped by the current human count. */
+    void IncrementAI();
+    void DecrementAI();
 
     // -----------------------------------------------------------------------
     // Roster access

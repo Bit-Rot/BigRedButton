@@ -28,10 +28,13 @@ class PARTYBUTTONS_API APartyMinigameGameMode : public APartyGameModeBase
     GENERATED_BODY()
 
 public:
+    APartyMinigameGameMode();
+
     virtual FString GetHudTitle() const override;
 
 protected:
     virtual void BeginPlay() override;
+    virtual void Tick(float DeltaSeconds) override;
     virtual void OnPlayerButton(int32 PlayerIndex) override;
 
     /**
@@ -48,6 +51,18 @@ protected:
      * then travel exactly like DeclareWinner. Guarded the same way.
      */
     virtual void DeclareNoContest();
+
+    /**
+     * Per-frame hook for AI-controlled players (dev-only testing aid — see
+     * FPartySessionState::NumAIPlayers, adjustable via the Lobby's Up/Down
+     * control). Empty default: for the 15 minigames that don't override this,
+     * AI simply does nothing — the "AI does nothing if unimplemented" tenet
+     * falls out of this default automatically, no per-game opt-out needed.
+     * Overrides MUST drive AI through the same OnPlayerButton/OnPlayerButtonReleased
+     * entry points real input uses (never touch a pawn/actor directly) so AI
+     * can never do something a real player couldn't.
+     */
+    virtual void TickAI(float DeltaSeconds) {}
 
     /** Roster index of the current game, resolved in BeginPlay. */
     int32 CurrentRosterIndex = INDEX_NONE;

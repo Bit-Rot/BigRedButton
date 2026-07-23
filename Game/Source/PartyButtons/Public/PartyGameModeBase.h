@@ -62,6 +62,13 @@ public:
     virtual bool IsTileJoined(int32 PlayerIndex) const;
 
     /**
+     * True if slot i is currently AI-controlled (dev-only testing aid). Used by
+     * the Lobby HUD to render a third tile state. Defaults to false — only
+     * phases that care about AI slots (currently just Lobby) need to override.
+     */
+    virtual bool IsTileAI(int32 PlayerIndex) const { return false; }
+
+    /**
      * Index of the currently highlighted menu option, or INDEX_NONE.
      * Used by MainMenu and Settings HUDs.
      */
@@ -81,6 +88,14 @@ protected:
 
     /** Called when the main button is held long enough (go back/up). */
     virtual void OnMainHold() {}
+
+    /**
+     * Called when the dev-only increment/decrement keys (Up/Down arrows) are
+     * pressed. Empty default — only phases that use them (currently just
+     * Lobby, for the AI player count) need to override.
+     */
+    virtual void OnDevIncrement() {}
+    virtual void OnDevDecrement() {}
 
     // ---- Travel helpers -------------------------------------------------------
 
@@ -109,6 +124,8 @@ private:
     void HandlePlayerButtonReleasedDelegate(int32 PlayerIndex) { OnPlayerButtonReleased(PlayerIndex); }
     void HandleMainTapDelegate()                               { OnMainTap(); }
     void HandleMainHoldDelegate()                              { OnMainHold(); }
+    void HandleDevIncrementDelegate()                          { OnDevIncrement(); }
+    void HandleDevDecrementDelegate()                          { OnDevDecrement(); }
 
     // Stored so we can remove bindings if needed.
     APartyInputController* BoundController = nullptr;

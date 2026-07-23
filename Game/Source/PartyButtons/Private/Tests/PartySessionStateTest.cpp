@@ -148,6 +148,8 @@ bool FPartySessionStateReset::RunTest(const FString& Parameters)
     S.AdvanceGame();
     S.CurrentGameIndex  = 3;
     S.CurrentPhase      = EPartyPhase::Minigame;
+    S.IncrementAI();
+    S.IncrementAI();
 
     S.ResetSession();
 
@@ -159,10 +161,189 @@ bool FPartySessionStateReset::RunTest(const FString& Parameters)
     TestFalse(TEXT("Reset: player 0 not registered"), S.IsPlayerRegistered(0));
     TestFalse(TEXT("Reset: player 4 not registered"), S.IsPlayerRegistered(4));
     TestEqual(TEXT("Reset: GetLeader == INDEX_NONE"), S.GetLeader(), static_cast<int32>(INDEX_NONE));
+    TestEqual(TEXT("Reset: NumAIPlayers == 0"), S.NumAIPlayers, 0);
 
     // Rules and roster preserved.
     TestEqual(TEXT("GamesPerSession preserved"), S.GamesPerSession, 7);
     TestEqual(TEXT("Roster preserved"), S.GameRoster.Num(), 16);
+
+    return true;
+}
+
+// --------------------------------------------------------------------------
+// PartyButtons.Session.State.AI*
+//
+// Tests for the dev-only AI player slot logic (FPartySessionState::ComputeAISlots
+// and friends). Pure code — no world, no actor, no engine subsystem.
+// --------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FPartyAIComputeSlotsReverseFill,
+    "PartyButtons.Session.State.AIComputeSlotsReverseFill",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FPartyAIComputeSlotsReverseFill::RunTest(const FString& Parameters)
+{
+    TArray<bool> NoHumans;
+    NoHumans.Init(false, FPartySessionState::NUM_PLAYERS);
+
+    // NumAI=3, no humans -> highest three indices (15, 14, 13) are AI.
+    TArray<bool> Slots;
+    FPartySessionState::ComputeAISlots(NoHumans, 3, Slots);
+    TestEqual(TEXT("OutIsAI sized to NUM_PLAYERS"), Slots.Num(), FPartySessionState::NUM_PLAYERS);
+    for (int32 i = 0; i < FPartySessionState::NUM_PLAYERS; i++)
+    {
+        const bool bExpectedAI = (i == 15 || i == 14 || i == 13);
+        TestEqual(FString::Printf(TEXT("Slot %d AI == %d"), i, bExpectedAI), Slots[i], bExpectedAI);
+    }
+
+    // NumAI=0 -> nothing is AI.
+    FPartySessionState::ComputeAISlots(NoHumans, 0, Slots);
+    for (bool b : Slots) { TestFalse(TEXT("NumAI=0: no slot is AI"), b); }
+
+    // NumAI=16 -> every slot is AI.
+    FPartySessionState::ComputeAISlots(NoHumans, 16, Slots);
+    for (bool b : Slots) { TestTrue(TEXT("NumAI=16: every slot is AI"), b); }
+
+    return true;
+}
+
+// --------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FPartyAIComputeSlotsHumanIntentWins,
+    "PartyButtons.Session.State.AIComputeSlotsHumanIntentWins",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FPartyAIComputeSlotsHumanIntentWins::RunTest(const FString& Parameters)
+{
+    TArray<bool> Claimed;
+    Claimed.Init(false, FPartySessionState::NUM_PLAYERS);
+    Claimed[15] = true; // a human has claimed slot 15
+
+    TArray<bool> Slots;
+    FPartySessionState::ComputeAISlots(Claimed, 1, Slots);
+    TestFalse(TEXT("Human-claimed slot 15 is never AI"), Slots[15]);
+    TestTrue(TEXT("AI shifts to the next free slot (14)"), Slots[14]);
+
+    // A second human claims 14 too — AI shifts again, to 13.
+    Claimed[14] = true;
+    FPartySessionState::ComputeAISlots(Claimed, 1, Slots);
+    TestFalse(TEXT("Human-claimed slot 14 is never AI"), Slots[14]);
+    TestTrue(TEXT("AI shifts to the next free slot (13)"), Slots[13]);
+
+    return true;
+}
+
+// --------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FPartyAIComputeSlotsCapsAtAvailable,
+    "PartyButtons.Session.State.AIComputeSlotsCapsAtAvailable",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FPartyAIComputeSlotsCapsAtAvailable::RunTest(const FString& Parameters)
+{
+    TArray<bool> Claimed;
+    Claimed.Init(false, FPartySessionState::NUM_PLAYERS);
+    for (int32 i = 0; i < 10; i++) { Claimed[i] = true; } // 10 humans claim slots 0..9
+
+    TArray<bool> Slots;
+    FPartySessionState::ComputeAISlots(Claimed, 16, Slots); // ask for far more AI than fits
+
+    int32 AICount = 0;
+    for (bool b : Slots) { if (b) { ++AICount; } }
+
+    // Only 6 slots (10..15) are free — AI is capped there, no overflow/crash.
+    TestEqual(TEXT("AI capped to the 6 available slots"), AICount, 6);
+    for (int32 i = 10; i < FPartySessionState::NUM_PLAYERS; i++)
+    {
+        TestTrue(FString::Printf(TEXT("Free slot %d is AI"), i), Slots[i]);
+    }
+
+    return true;
+}
+
+// --------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FPartyAIIncrementDecrementClamp,
+    "PartyButtons.Session.State.AIIncrementDecrementClamp",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FPartyAIIncrementDecrementClamp::RunTest(const FString& Parameters)
+{
+    FPartySessionState S;
+    TestEqual(TEXT("Starts at 0"), S.NumAIPlayers, 0);
+
+    // Decrementing below 0 stays at 0.
+    S.DecrementAI();
+    TestEqual(TEXT("Decrement below 0 clamps to 0"), S.NumAIPlayers, 0);
+
+    // Incrementing past 16 stays at 16.
+    for (int32 i = 0; i < 20; i++) { S.IncrementAI(); }
+    TestEqual(TEXT("Increment past 16 clamps to 16"), S.NumAIPlayers, 16);
+
+    S.DecrementAI();
+    TestEqual(TEXT("Decrement from 16 -> 15"), S.NumAIPlayers, 15);
+
+    return true;
+}
+
+// --------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FPartyAIIsSlotAIUsesRegisteredPlayers,
+    "PartyButtons.Session.State.AIIsSlotAIUsesRegisteredPlayers",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FPartyAIIsSlotAIUsesRegisteredPlayers::RunTest(const FString& Parameters)
+{
+    FPartySessionState S;
+    S.RegisterPlayer(15);
+    S.RegisterPlayer(0);
+    S.IncrementAI();
+    S.IncrementAI();
+
+    TArray<bool> Expected;
+    FPartySessionState::ComputeAISlots(S.RegisteredPlayers, S.NumAIPlayers, Expected);
+
+    for (int32 i = 0; i < FPartySessionState::NUM_PLAYERS; i++)
+    {
+        TestEqual(FString::Printf(TEXT("IsSlotAI(%d) matches ComputeAISlots"), i), S.IsSlotAI(i), Expected[i]);
+    }
+
+    // Out-of-range is safely false.
+    TestFalse(TEXT("IsSlotAI(-1) == false"), S.IsSlotAI(-1));
+    TestFalse(TEXT("IsSlotAI(16) == false"), S.IsSlotAI(16));
+
+    return true;
+}
+
+// --------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FPartyAIGetActiveParticipantCount,
+    "PartyButtons.Session.State.AIGetActiveParticipantCount",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FPartyAIGetActiveParticipantCount::RunTest(const FString& Parameters)
+{
+    FPartySessionState S;
+    TestEqual(TEXT("0 humans, 0 AI -> 0 active"), S.GetActiveParticipantCount(), 0);
+
+    S.RegisterPlayer(0);
+    S.RegisterPlayer(1);
+    TestEqual(TEXT("2 humans, 0 AI -> 2 active"), S.GetActiveParticipantCount(), 2);
+
+    S.IncrementAI();
+    S.IncrementAI();
+    S.IncrementAI();
+    TestEqual(TEXT("2 humans, 3 AI (disjoint) -> 5 active"), S.GetActiveParticipantCount(), 5);
+
+    // Register every slot as human — AI has nowhere free, count stays at 16 (no double-count).
+    for (int32 i = 0; i < FPartySessionState::NUM_PLAYERS; i++) { S.RegisterPlayer(i); }
+    TestEqual(TEXT("16 humans, 3 AI (fully overlapped) -> still 16 active"), S.GetActiveParticipantCount(), 16);
 
     return true;
 }

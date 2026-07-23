@@ -2,6 +2,20 @@
 #include "PartyButtons.h"
 #include "PartySessionSubsystem.h"
 
+APartyMinigameGameMode::APartyMinigameGameMode()
+{
+    // Enabled so TickAI can drive AI-controlled players (see TickAI's class
+    // comment). No GameMode in this codebase ticked before this — scoped
+    // narrowly to minigames, not the menu/lobby phases, which don't need it.
+    PrimaryActorTick.bCanEverTick = true;
+}
+
+void APartyMinigameGameMode::Tick(float DeltaSeconds)
+{
+    Super::Tick(DeltaSeconds);
+    TickAI(DeltaSeconds);
+}
+
 void APartyMinigameGameMode::BeginPlay()
 {
     Super::BeginPlay();

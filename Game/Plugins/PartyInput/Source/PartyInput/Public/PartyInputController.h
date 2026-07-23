@@ -26,6 +26,14 @@ DECLARE_MULTICAST_DELEGATE_OneParam(FOnPartyButtonPressed, int32 /*PlayerIndex*/
 DECLARE_MULTICAST_DELEGATE(FOnPartyMainButton);
 
 /**
+ * Delegate broadcast by the generic dev-only increment/decrement controls
+ * (Up/Down arrow keys). No params — this plugin only knows "a dev nudge
+ * happened"; what it MEANS (e.g. adjusting an AI player count in the Lobby)
+ * is entirely up to whichever game-layer code binds to it. See bEnableDevControls.
+ */
+DECLARE_MULTICAST_DELEGATE(FOnPartyDevKey);
+
+/**
  * APartyInputController
  *
  * Fans 16 physical USB HID buttons through Unreal Enhanced Input to a single
@@ -69,6 +77,12 @@ public:
      * Use this to go back / up one level.
      */
     FOnPartyMainButton OnMainButtonHeld;
+
+    /** Broadcast when the dev-only "increment" key (Up arrow) is pressed. See bEnableDevControls. */
+    FOnPartyDevKey OnDevIncrement;
+
+    /** Broadcast when the dev-only "decrement" key (Down arrow) is pressed. See bEnableDevControls. */
+    FOnPartyDevKey OnDevDecrement;
 
     /**
      * Pure, world-free classification rule: held if HeldSeconds >= Threshold.
@@ -128,6 +142,17 @@ protected:
     UPROPERTY(EditDefaultsOnly, Category = "PartyInput")
     float MainButtonHoldThreshold = 0.6f;
 
+    /**
+     * When true (default), BuildButtonInputs also maps a generic dev-only
+     * increment/decrement control to the Up/Down arrow keys (OnDevIncrement /
+     * OnDevDecrement). These have no physical arcade-cabinet equivalent —
+     * purely a development/testing convenience (e.g. adjusting an AI player
+     * count in the Lobby). Kept separate from bEnableKeyboardEmulation since
+     * arrow keys are not part of the asdfjkl;ertghuio button-emulation scheme.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "PartyInput")
+    bool bEnableDevControls = true;
+
     virtual void BeginPlay() override;
     virtual void SetupInputComponent() override;
 
@@ -152,6 +177,14 @@ protected:
     UPROPERTY(EditDefaultsOnly, Category = "PartyInput")
     TObjectPtr<UInputAction> MainButtonAction;
 
+    /** Generic dev-only "increment" action, mapped only to the Up arrow key. See bEnableDevControls. */
+    UPROPERTY(EditDefaultsOnly, Category = "PartyInput")
+    TObjectPtr<UInputAction> DevIncrementAction;
+
+    /** Generic dev-only "decrement" action, mapped only to the Down arrow key. See bEnableDevControls. */
+    UPROPERTY(EditDefaultsOnly, Category = "PartyInput")
+    TObjectPtr<UInputAction> DevDecrementAction;
+
     /** Bound to all 16 actions' ETriggerEvent::Started. Resolves which action fired. */
     void OnAnyButton(const FInputActionInstance& Instance);
 
@@ -165,6 +198,10 @@ protected:
     /** Fires at MainButtonHoldThreshold while the main button is still held. */
     void OnMainHoldTimerFired();
 
+    /** Bound to DevIncrementAction/DevDecrementAction Started. A press is a single nudge — no hold semantics. */
+    void OnDevIncrementStarted(const FInputActionInstance& Instance);
+    void OnDevDecrementStarted(const FInputActionInstance& Instance);
+
     /**
      * ===== HANDOFF POINT =====
      * PlayerIndex 0 => physical button 1 / player 1, etc.
@@ -176,6 +213,10 @@ protected:
     /** Override or bind OnMainButtonTapped / OnMainButtonHeld to react. */
     virtual void HandleMainButtonTapped();
     virtual void HandleMainButtonHeld();
+
+    /** Override or bind OnDevIncrement / OnDevDecrement to react. */
+    virtual void HandleDevIncrement();
+    virtual void HandleDevDecrement();
 
 private:
     static constexpr int32 NUM_BUTTONS = 16;

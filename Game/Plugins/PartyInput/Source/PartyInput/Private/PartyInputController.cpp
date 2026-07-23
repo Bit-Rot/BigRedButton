@@ -31,8 +31,9 @@
 void APartyInputController::BuildButtonInputs()
 {
     // Skip if already fully populated (e.g., by designer-assigned asset properties).
-    // Main button is included in the skip guard: if all three are set, skip entirely.
-    if (ButtonActions.Num() == NUM_BUTTONS && ButtonMappingContext != nullptr && MainButtonAction != nullptr)
+    // Main button + dev actions are included in the skip guard: if all are set, skip entirely.
+    if (ButtonActions.Num() == NUM_BUTTONS && ButtonMappingContext != nullptr && MainButtonAction != nullptr
+        && DevIncrementAction != nullptr && DevDecrementAction != nullptr)
     {
         return;
     }
@@ -56,6 +57,22 @@ void APartyInputController::BuildButtonInputs()
         UInputAction* MainIA = NewObject<UInputAction>(Outer, NAME_None, RF_Transient);
         MainIA->ValueType = EInputActionValueType::Boolean;
         MainButtonAction = MainIA;
+    }
+
+    // Build the generic dev-only increment/decrement actions — always created (like the
+    // main button) so the skip-guard above stays a simple non-null check; only the key
+    // MAPPING below is gated by bEnableDevControls.
+    if (DevIncrementAction == nullptr)
+    {
+        UInputAction* IncIA = NewObject<UInputAction>(Outer, NAME_None, RF_Transient);
+        IncIA->ValueType = EInputActionValueType::Boolean;
+        DevIncrementAction = IncIA;
+    }
+    if (DevDecrementAction == nullptr)
+    {
+        UInputAction* DecIA = NewObject<UInputAction>(Outer, NAME_None, RF_Transient);
+        DecIA->ValueType = EInputActionValueType::Boolean;
+        DevDecrementAction = DecIA;
     }
 
     // Build the mapping context.
@@ -88,12 +105,22 @@ void APartyInputController::BuildButtonInputs()
         IMC->MapKey(MainButtonAction.Get(), EKeys::Enter);
     }
 
+    // Dev-only Up/Down nudge keys — no physical arcade equivalent, gated by its own
+    // flag (independent of bEnableKeyboardEmulation, since arrows aren't part of the
+    // asdfjkl;ertghuio scheme).
+    if (bEnableDevControls)
+    {
+        IMC->MapKey(DevIncrementAction.Get(), EKeys::Up);
+        IMC->MapKey(DevDecrementAction.Get(), EKeys::Down);
+    }
+
     ButtonMappingContext = IMC;
 
     UE_LOG(LogPartyInput, Log,
-        TEXT("PartyInputController: built %d player actions + 1 main button action + IMC at runtime%s."),
+        TEXT("PartyInputController: built %d player actions + 1 main button action + IMC at runtime%s%s."),
         NUM_BUTTONS,
-        bEnableKeyboardEmulation ? TEXT(" (+ keyboard emulation: asdfkjl;ertghuio + Enter)") : TEXT(""));
+        bEnableKeyboardEmulation ? TEXT(" (+ keyboard emulation: asdfkjl;ertghuio + Enter)") : TEXT(""),
+        bEnableDevControls ? TEXT(" (+ dev Up/Down)") : TEXT(""));
 }
 
 // ---- Lifecycle ------------------------------------------------------------
@@ -160,6 +187,18 @@ void APartyInputController::SetupInputComponent()
                         &APartyInputController::OnMainButtonStarted);
         EIC->BindAction(MainButtonAction, ETriggerEvent::Completed, this,
                         &APartyInputController::OnMainButtonCompleted);
+    }
+
+    // Dev-only increment/decrement — a press is a single nudge, no hold semantics.
+    if (DevIncrementAction)
+    {
+        EIC->BindAction(DevIncrementAction, ETriggerEvent::Started, this,
+                        &APartyInputController::OnDevIncrementStarted);
+    }
+    if (DevDecrementAction)
+    {
+        EIC->BindAction(DevDecrementAction, ETriggerEvent::Started, this,
+                        &APartyInputController::OnDevDecrementStarted);
     }
 
     UE_LOG(LogPartyInput, Log, TEXT("PartyInputController: bound %d player actions + main button."), ButtonActions.Num());
@@ -248,4 +287,28 @@ void APartyInputController::HandleMainButtonHeld()
 {
     UE_LOG(LogPartyInput, Log, TEXT("Main button held (back/up)."));
     OnMainButtonHeld.Broadcast();
+}
+
+// ---- Dev-only increment/decrement ------------------------------------------
+
+void APartyInputController::OnDevIncrementStarted(const FInputActionInstance& /*Instance*/)
+{
+    HandleDevIncrement();
+}
+
+void APartyInputController::OnDevDecrementStarted(const FInputActionInstance& /*Instance*/)
+{
+    HandleDevDecrement();
+}
+
+void APartyInputController::HandleDevIncrement()
+{
+    UE_LOG(LogPartyInput, Log, TEXT("Dev increment pressed."));
+    OnDevIncrement.Broadcast();
+}
+
+void APartyInputController::HandleDevDecrement()
+{
+    UE_LOG(LogPartyInput, Log, TEXT("Dev decrement pressed."));
+    OnDevDecrement.Broadcast();
 }

@@ -131,8 +131,8 @@ void APartyFlowHUD::DrawSettings(APartyGameModeBase* GM)
 void APartyFlowHUD::DrawLobby(APartyGameModeBase* GM)
 {
     DrawRect(FLinearColor(0.02f, 0.05f, 0.02f, 0.85f), 0.f, 0.f, Canvas->SizeX, Canvas->SizeY);
-    DrawCenteredText(TEXT("LOBBY"), 30.f, FLinearColor(1.f, 0.9f, 0.1f, 1.f), 2.0f);
-    DrawCenteredText(TEXT("HOLD your button to join   Release = deactivate   Need 2+"), 80.f,
+    DrawCenteredText(TEXT("LOBBY"), 20.f, FLinearColor(1.f, 0.9f, 0.1f, 1.f), 2.0f);
+    DrawCenteredText(TEXT("HOLD your button to join   Release = deactivate   Need 2+"), 55.f,
                      FLinearColor(0.8f, 0.8f, 0.8f, 1.f));
 
     // Countdown or waiting prompt
@@ -140,17 +140,24 @@ void APartyFlowHUD::DrawLobby(APartyGameModeBase* GM)
     if (Remaining >= 0.0f)
     {
         const FString Timer = FString::Printf(TEXT("Starting in: %.1fs — keep holding!"), Remaining);
-        DrawCenteredText(Timer, 130.f, FLinearColor(0.3f, 1.f, 0.3f, 1.f), 1.5f);
+        DrawCenteredText(Timer, 90.f, FLinearColor(0.3f, 1.f, 0.3f, 1.f), 1.5f);
     }
     else
     {
-        DrawCenteredText(TEXT("Waiting for 2+ players to hold..."), 130.f,
+        DrawCenteredText(TEXT("Waiting for 2+ players to hold..."), 90.f,
                          FLinearColor(0.5f, 0.5f, 0.5f, 1.f));
     }
 
-    // 4×4 grid — lit = joined
+    // Dev-only reminder: Up/Down adjusts the AI player count (see APartyLobbyGameMode::OnDevIncrement/Decrement).
+    const UPartySessionSubsystem* S = GetSession();
+    const int32 AICount = S ? S->GetNumAIPlayers() : 0;
+    const FString DevLine = FString::Printf(TEXT("[DEV] Up/Down: add/remove AI players — currently %d"), AICount);
+    DrawCenteredText(DevLine, 125.f, FLinearColor(0.4f, 0.6f, 0.9f, 1.f));
+
+    // 4×4 grid — lit (green) = joined by a human, AI (blue) = AI-filled
     DrawButtonGrid(
         [&](int32 i) { return GM ? GM->IsTileJoined(i) : false; },
+        [&](int32 i) { return GM ? GM->IsTileAI(i) : false; },
         [&](int32 i) { return FString::Printf(TEXT("%d"), i + 1); },
         INDEX_NONE);
 }
@@ -167,6 +174,7 @@ void APartyFlowHUD::DrawLevelSelect(APartyGameModeBase* GM, const FPartySessionS
     // 4×4 grid — highlight is the moving cursor; label is the game DisplayName (abbreviated)
     DrawButtonGrid(
         [&](int32 i) { return false; }, // no cells are "joined" lit in LevelSelect
+        [&](int32 i) { return false; }, // no AI concept in LevelSelect
         [&](int32 i) -> FString
         {
             if (State.GameRoster.IsValidIndex(i))
@@ -241,6 +249,7 @@ void APartyFlowHUD::DrawResults(const FPartySessionState& State)
 
 void APartyFlowHUD::DrawButtonGrid(
     TFunctionRef<bool(int32)>    IsLit,
+    TFunctionRef<bool(int32)>    IsAI,
     TFunctionRef<FString(int32)> GetLabel,
     int32                        HighlightIndex)
 {
@@ -256,8 +265,10 @@ void APartyFlowHUD::DrawButtonGrid(
         const float Y   = GRID_START_Y + Row * Step;
 
         const bool bLit         = IsLit(i);
+        const bool bIsAI        = IsAI(i);
         const bool bHighlighted = (i == HighlightIndex);
 
+        // Precedence: highlight > lit (human/joined) > AI > idle — never both.
         FLinearColor BoxColor;
         if (bHighlighted)
         {
@@ -265,7 +276,11 @@ void APartyFlowHUD::DrawButtonGrid(
         }
         else if (bLit)
         {
-            BoxColor = FLinearColor(0.1f, 0.9f, 0.2f, 1.f);   // green: joined/lit
+            BoxColor = FLinearColor(0.1f, 0.9f, 0.2f, 1.f);   // green: joined/lit (human)
+        }
+        else if (bIsAI)
+        {
+            BoxColor = FLinearColor(0.15f, 0.35f, 0.75f, 0.9f); // blue: AI-filled (dev-only)
         }
         else
         {

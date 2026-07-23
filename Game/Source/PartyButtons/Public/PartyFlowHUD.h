@@ -50,12 +50,16 @@ private:
 
     /**
      * Draw the 4×4 grid of tiles.
-     * IsLit(i) controls the cell background color.
+     * IsLit(i) controls the cell background color (human/joined — green).
+     * IsAI(i) controls the AI-filled color (dev-only testing aid — blue).
+     * Color precedence: highlight > lit(human) > AI > idle, so a tile is
+     * never drawn as more than one state.
      * HighlightIndex (if >= 0) draws a brighter overlay on that tile.
      * Label(i) is the text drawn inside each cell (or empty string).
      */
     void DrawButtonGrid(
         TFunctionRef<bool(int32)>    IsLit,
+        TFunctionRef<bool(int32)>    IsAI,
         TFunctionRef<FString(int32)> GetLabel,
         int32                        HighlightIndex = INDEX_NONE);
 
@@ -71,5 +75,5 @@ private:
     static constexpr float  CELL_SIZE   = 80.f;
     static constexpr float  CELL_MARGIN = 10.f;
     static constexpr float  GRID_START_X = 40.f;
-    static constexpr float  GRID_START_Y = 190.f; // below title + subtitle rows
+    static constexpr float  GRID_START_Y = 170.f; // below title + subtitle rows (Lobby now has 4 text rows above)
 };

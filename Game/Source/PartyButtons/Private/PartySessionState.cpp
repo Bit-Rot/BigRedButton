@@ -57,6 +57,7 @@ void FPartySessionState::ResetSession()
     GamesPlayed      = 0;
     CurrentGameIndex = INDEX_NONE;
     CurrentPhase     = EPartyPhase::MainMenu;
+    NumAIPlayers     = 0;
 }
 
 // ---- Player registration ---------------------------------------------------
@@ -102,6 +103,55 @@ void FPartySessionState::AdvanceGame()
 bool FPartySessionState::IsSessionComplete() const
 {
     return GamesPlayed >= GamesPerSession;
+}
+
+// ---- AI players --------------------------------------------------------------
+
+/*static*/ void FPartySessionState::ComputeAISlots(const TArray<bool>& ClaimedByHuman, int32 NumAI, TArray<bool>& OutIsAI)
+{
+    OutIsAI.Init(false, NUM_PLAYERS);
+
+    int32 Remaining = FMath::Clamp(NumAI, 0, NUM_PLAYERS);
+    for (int32 i = NUM_PLAYERS - 1; i >= 0 && Remaining > 0; i--)
+    {
+        const bool bClaimed = ClaimedByHuman.IsValidIndex(i) && ClaimedByHuman[i];
+        if (bClaimed) { continue; }
+
+        OutIsAI[i] = true;
+        --Remaining;
+    }
+}
+
+bool FPartySessionState::IsSlotAI(int32 PlayerIndex) const
+{
+    if (!IsValidPlayerIndex(PlayerIndex)) { return false; }
+
+    TArray<bool> AISlots;
+    ComputeAISlots(RegisteredPlayers, NumAIPlayers, AISlots);
+    return AISlots[PlayerIndex];
+}
+
+int32 FPartySessionState::GetActiveParticipantCount() const
+{
+    TArray<bool> AISlots;
+    ComputeAISlots(RegisteredPlayers, NumAIPlayers, AISlots);
+
+    int32 Count = 0;
+    for (int32 i = 0; i < NUM_PLAYERS; i++)
+    {
+        if (IsPlayerRegistered(i) || AISlots[i]) { ++Count; }
+    }
+    return Count;
+}
+
+void FPartySessionState::IncrementAI()
+{
+    NumAIPlayers = FMath::Clamp(NumAIPlayers + 1, 0, NUM_PLAYERS);
+}
+
+void FPartySessionState::DecrementAI()
+{
+    NumAIPlayers = FMath::Clamp(NumAIPlayers - 1, 0, NUM_PLAYERS);
 }
 
 // ---- Roster access ---------------------------------------------------------

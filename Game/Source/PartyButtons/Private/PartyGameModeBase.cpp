@@ -43,9 +43,11 @@ void APartyGameModeBase::PostLogin(APlayerController* NewPlayer)
     PIC->OnButtonReleased.AddUObject(this,  &APartyGameModeBase::HandlePlayerButtonReleasedDelegate);
     PIC->OnMainButtonTapped.AddUObject(this, &APartyGameModeBase::HandleMainTapDelegate);
     PIC->OnMainButtonHeld.AddUObject(this,   &APartyGameModeBase::HandleMainHoldDelegate);
+    PIC->OnDevIncrement.AddUObject(this,     &APartyGameModeBase::HandleDevIncrementDelegate);
+    PIC->OnDevDecrement.AddUObject(this,     &APartyGameModeBase::HandleDevDecrementDelegate);
 
     UE_LOG(LogPartyButtons, Log,
-        TEXT("%s: bound player + main-button delegates to %s."),
+        TEXT("%s: bound player + main-button + dev-key delegates to %s."),
         *GetName(), *PIC->GetName());
 }
 

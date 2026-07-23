@@ -32,20 +32,39 @@ public:
     virtual float   GetCountdownRemaining() const override;
     virtual bool    IsTileJoined(int32 i)   const override;
 
+    /**
+     * True if slot i is currently AI-controlled, computed against the LIVE
+     * bButtonHeld array (not RegisteredPlayers — registration hasn't happened
+     * yet during the countdown). See FPartySessionState::ComputeAISlots.
+     */
+    virtual bool IsTileAI(int32 i) const override;
+
 protected:
     virtual void BeginPlay() override;
     virtual void OnPlayerButton(int32 PlayerIndex) override;
     virtual void OnPlayerButtonReleased(int32 PlayerIndex) override;
     virtual void OnMainHold() override;
 
+    /** Dev-only Up/Down: adjust the AI player count, then recheck the countdown threshold. */
+    virtual void OnDevIncrement() override;
+    virtual void OnDevDecrement() override;
+
 private:
     void OnCountdownComplete();
 
-    /** Recheck timer state after any press/release: start if >=2 held, stop if <=1. */
+    /** Recheck timer state after any press/release/AI-count change: start if held+AI >= MIN_PLAYERS, stop if below. */
     void RecheckTimer();
 
     /** Count of buttons currently held down. */
     int32 GetActiveHeldCount() const;
+
+    /**
+     * Number of AI slots currently in effect against the live held-button set
+     * (i.e., ComputeAISlots(bButtonHeld, NumAIPlayers, ...) true-count). Used
+     * so AI counts toward the Lobby's start/complete thresholds alongside
+     * physically-held buttons.
+     */
+    int32 GetEffectiveAICount() const;
 
     FTimerHandle CountdownTimer;
     bool  bCountingDown    = false;

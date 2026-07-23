@@ -58,6 +58,16 @@ public:
     bool  IsSessionComplete() const    { return State.IsSessionComplete(); }
 
     // -----------------------------------------------------------------------
+    // AI players (dev-only testing aid — Lobby Up/Down control)
+    // -----------------------------------------------------------------------
+
+    int32 GetNumAIPlayers() const                       { return State.NumAIPlayers; }
+    void  IncrementAI()                                  { State.IncrementAI(); }
+    void  DecrementAI()                                  { State.DecrementAI(); }
+    bool  IsSlotAI(int32 PlayerIndex) const              { return State.IsSlotAI(PlayerIndex); }
+    int32 GetActiveParticipantCount() const              { return State.GetActiveParticipantCount(); }
+
+    // -----------------------------------------------------------------------
     // Roster / current game
     // -----------------------------------------------------------------------
 

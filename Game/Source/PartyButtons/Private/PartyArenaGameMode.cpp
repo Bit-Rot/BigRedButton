@@ -67,22 +67,47 @@ void APartyArenaGameMode::SpawnPawns()
 {
     if (!GetWorld() || !Arena || !DuelPawnClass) { return; }
 
-    TArray<int32> Participants;
-    if (UPartySessionSubsystem* S = Session())
+    UPartySessionSubsystem* S = Session();
+
+    TArray<bool> HumanClaimed;
+    HumanClaimed.Init(false, FPartySessionState::NUM_PLAYERS);
+    if (S)
     {
         for (int32 i = 0; i < FPartySessionState::NUM_PLAYERS; i++)
         {
-            if (S->IsPlayerRegistered(i))
-            {
-                Participants.Add(i);
-            }
+            HumanClaimed[i] = S->IsPlayerRegistered(i);
         }
     }
 
+    TArray<int32> Participants;
+    for (int32 i = 0; i < FPartySessionState::NUM_PLAYERS; i++)
+    {
+        if (HumanClaimed[i]) { Participants.Add(i); }
+    }
+
+    // AI slots (dev-only Lobby Up/Down control) — derived the same way the
+    // Lobby HUD derives them, so "player intent wins" and "reverse fill" are
+    // consistent everywhere. See FPartySessionState::ComputeAISlots.
+    const int32 NumAI = S ? S->GetNumAIPlayers() : 0;
+    TArray<bool> AISlots;
+    FPartySessionState::ComputeAISlots(HumanClaimed, NumAI, AISlots);
+    for (int32 i = 0; i < AISlots.Num(); i++)
+    {
+        if (AISlots[i])
+        {
+            Participants.Add(i);
+            AIParticipants.Add(i);
+        }
+    }
+
+    // Dev-fallback: ONLY when NEITHER humans nor AI are configured (e.g.
+    // opening L_GameA directly in PIE with nothing set up). Any AI count > 0
+    // supersedes this — the explicit AI configuration always takes priority
+    // over the synthetic fallback.
     if (Participants.IsEmpty())
     {
         UE_LOG(LogPartyButtons, Log,
-            TEXT("APartyArenaGameMode: no registered players — spawning %d dev-fallback player(s)."),
+            TEXT("APartyArenaGameMode: no registered players or AI — spawning %d dev-fallback player(s)."),
             DevFallbackPlayers);
         for (int32 i = 0; i < DevFallbackPlayers; i++)
         {
@@ -94,6 +119,7 @@ void APartyArenaGameMode::SpawnPawns()
     // consistent with FPartySessionState::SelectNextGame's use of FRandomStream
     // rather than true nondeterministic randomness.
     FRandomStream Rng(static_cast<int32>(GetWorld()->GetUniqueID()) ^ 0x50415254);
+    AIRng = FRandomStream(static_cast<int32>(GetWorld()->GetUniqueID()) ^ 0x41494152); // "AIR"
 
     constexpr int32 MaxSpawnAttempts = 30;
     const float MinSepUnits = MinSpawnSeparationMeters * 100.f;
@@ -131,9 +157,51 @@ void APartyArenaGameMode::SpawnPawns()
         Pawns.Add(PlayerIndex, Pawn);
         AlivePlayers.Add(PlayerIndex);
         PlacedLocations.Add(SpawnTransform.GetLocation());
+
+        if (AIParticipants.Contains(PlayerIndex))
+        {
+            FDuelAIState& AIPawnState = AIState.FindOrAdd(PlayerIndex);
+            AIPawnState.bHolding      = false;
+            AIPawnState.NextEventTime = GetWorld()->GetTimeSeconds() + AIRng.FRandRange(AIThinkMinSeconds, AIThinkMaxSeconds);
+        }
     }
 
-    UE_LOG(LogPartyButtons, Log, TEXT("APartyArenaGameMode: spawned %d duel pawn(s)."), Pawns.Num());
+    UE_LOG(LogPartyButtons, Log, TEXT("APartyArenaGameMode: spawned %d duel pawn(s) (%d AI)."),
+        Pawns.Num(), AIParticipants.Num());
+}
+
+void APartyArenaGameMode::TickAI(float DeltaSeconds)
+{
+    if (bWinnerDeclared || AIState.IsEmpty() || !GetWorld()) { return; }
+
+    const double Now = GetWorld()->GetTimeSeconds();
+
+    // Copy keys first: OnPlayerButton/OnPlayerButtonReleased below can lead to
+    // a pawn dying (immediately or on a later tick) and HandlePawnDied mutating
+    // AIState — iterating a snapshot avoids invalidating the loop.
+    TArray<int32> Indices;
+    AIState.GetKeys(Indices);
+
+    for (int32 PlayerIndex : Indices)
+    {
+        FDuelAIState* State = AIState.Find(PlayerIndex);
+        if (!State || Now < State->NextEventTime) { continue; }
+
+        if (!State->bHolding)
+        {
+            // Same entry point real button input uses (via the delegate chain
+            // from APartyInputController) — see this method's class comment.
+            OnPlayerButton(PlayerIndex);
+            State->bHolding      = true;
+            State->NextEventTime = Now + AIRng.FRandRange(AIHoldMinSeconds, AIHoldMaxSeconds);
+        }
+        else
+        {
+            OnPlayerButtonReleased(PlayerIndex);
+            State->bHolding      = false;
+            State->NextEventTime = Now + AIRng.FRandRange(AIThinkMinSeconds, AIThinkMaxSeconds);
+        }
+    }
 }
 
 FLinearColor APartyArenaGameMode::PlayerColor(int32 PlayerIndex)
@@ -173,6 +241,7 @@ void APartyArenaGameMode::HandlePawnDied(int32 PlayerIndex)
 
     AlivePlayers.Remove(PlayerIndex);
     Pawns.Remove(PlayerIndex);
+    AIState.Remove(PlayerIndex); // avoid stale timer churn for a dead AI pawn
 
     UE_LOG(LogPartyButtons, Log, TEXT("APartyArenaGameMode: player %d down — %d remaining."),
         PlayerIndex + 1, AlivePlayers.Num());
