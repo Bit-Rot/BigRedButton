@@ -119,10 +119,16 @@ void APartyGameModeBase::TravelToGame(int32 RosterIndex)
     S->SetCurrentGame(RosterIndex);
     S->SetPhase(EPartyPhase::Minigame);
 
-    const FPartyGameInfo& Info  = Roster[RosterIndex];
-    const FPartyPhaseRoute Base = PartyFlow::GetRoute(EPartyPhase::Minigame);
-    const FString Options       = PartyFlow::BuildGameModeOption(Base.GameModeClassPath);
-    const FName   TargetMap     = Info.MapName;
+    const FPartyGameInfo& Info = Roster[RosterIndex];
+
+    // Most roster entries share PartyMinigameGameMode (the Minigame phase route).
+    // A game may instead set its own GameModeClassPath (e.g. slot 0 -> PartyArenaGameMode)
+    // to run bespoke rules while still traveling to its own map.
+    const FString GameModeClassPath = Info.GameModeClassPath.IsEmpty()
+        ? PartyFlow::GetRoute(EPartyPhase::Minigame).GameModeClassPath
+        : Info.GameModeClassPath;
+    const FString Options   = PartyFlow::BuildGameModeOption(GameModeClassPath);
+    const FName   TargetMap = Info.MapName;
 
     UE_LOG(LogPartyButtons, Log,
         TEXT("%s: TravelToGame %d (%s) -> %s%s"),

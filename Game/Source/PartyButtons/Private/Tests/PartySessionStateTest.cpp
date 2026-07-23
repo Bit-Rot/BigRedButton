@@ -288,4 +288,41 @@ bool FPartySessionStateSelectNextGame::RunTest(const FString& Parameters)
     return true;
 }
 
+// --------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FPartyRosterGameModeOverride,
+    "PartyButtons.Session.Roster.GameModeOverrideOnlyOnSlotZero",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FPartyRosterGameModeOverride::RunTest(const FString& Parameters)
+{
+    FPartySessionState S;
+
+    // Slot 0 (L_GameA / "Reflex Rumble") overrides the shared minigame GameMode
+    // with its own (APartyArenaGameMode) — see APartyGameModeBase::TravelToGame.
+    const FPartyGameInfo& Slot0 = S.GameRoster[0];
+    TestFalse(TEXT("Slot 0 has a GameModeClassPath override"), Slot0.GameModeClassPath.IsEmpty());
+    TestTrue(TEXT("Slot 0 override begins /Script/PartyButtons."),
+             Slot0.GameModeClassPath.StartsWith(TEXT("/Script/PartyButtons.")));
+
+    // Pitfall guard: reflected class name must not contain the 'A' prefix.
+    const int32 DotIndex = Slot0.GameModeClassPath.Find(TEXT("."), ESearchCase::CaseSensitive, ESearchDir::FromEnd);
+    if (DotIndex != INDEX_NONE)
+    {
+        const FString ClassName = Slot0.GameModeClassPath.Mid(DotIndex + 1);
+        TestFalse(TEXT("Slot 0 class name must not start with 'A'"), ClassName.StartsWith(TEXT("A")));
+    }
+
+    // Every other slot has no override — they share APartyMinigameGameMode via
+    // the Minigame phase route.
+    for (int32 i = 1; i < S.GameRoster.Num(); i++)
+    {
+        TestTrue(FString::Printf(TEXT("Slot %d has no GameModeClassPath override"), i),
+                 S.GameRoster[i].GameModeClassPath.IsEmpty());
+    }
+
+    return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

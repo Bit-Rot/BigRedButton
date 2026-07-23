@@ -42,6 +42,9 @@ public:
     /** Title string shown by APartyFlowHUD for this phase. */
     virtual FString GetHudTitle() const;
 
+    /** Subtitle/instructions string shown by APartyFlowHUD under the Minigame title. */
+    virtual FString GetHudSubtitle() const { return TEXT("First to press wins!"); }
+
     /**
      * Index of the highlighted tile in the 4×4 grid (used by LevelSelect HUD).
      * Returns INDEX_NONE when not applicable.

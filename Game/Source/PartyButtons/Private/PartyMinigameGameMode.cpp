@@ -71,6 +71,12 @@ void APartyMinigameGameMode::OnPlayerButton(int32 PlayerIndex)
         return;
     }
 
+    DeclareWinner(PlayerIndex);
+}
+
+void APartyMinigameGameMode::DeclareWinner(int32 PlayerIndex)
+{
+    if (bWinnerDeclared) { return; }
     bWinnerDeclared = true;
 
     UE_LOG(LogPartyButtons, Log,
@@ -80,21 +86,42 @@ void APartyMinigameGameMode::OnPlayerButton(int32 PlayerIndex)
     if (UPartySessionSubsystem* S = Session())
     {
         S->RecordWin(PlayerIndex);
-        S->AdvanceGame();
+    }
 
-        if (S->IsSessionComplete())
-        {
-            UE_LOG(LogPartyButtons, Log,
-                TEXT("APartyMinigameGameMode: session complete (%d games) — going to Results."),
-                S->GetGamesPlayed());
-            TravelToPhase(EPartyPhase::Results);
-        }
-        else
-        {
-            UE_LOG(LogPartyButtons, Log,
-                TEXT("APartyMinigameGameMode: game %d/%d done — back to LevelSelect."),
-                S->GetGamesPlayed(), S->GetGamesPerSession());
-            TravelToPhase(EPartyPhase::LevelSelect);
-        }
+    AdvanceAndTravel();
+}
+
+void APartyMinigameGameMode::DeclareNoContest()
+{
+    if (bWinnerDeclared) { return; }
+    bWinnerDeclared = true;
+
+    UE_LOG(LogPartyButtons, Log,
+        TEXT("APartyMinigameGameMode: game %d (%s) ended with no winner."),
+        CurrentRosterIndex, *CurrentGameName);
+
+    AdvanceAndTravel();
+}
+
+void APartyMinigameGameMode::AdvanceAndTravel()
+{
+    UPartySessionSubsystem* S = Session();
+    if (!S) { return; }
+
+    S->AdvanceGame();
+
+    if (S->IsSessionComplete())
+    {
+        UE_LOG(LogPartyButtons, Log,
+            TEXT("APartyMinigameGameMode: session complete (%d games) — going to Results."),
+            S->GetGamesPlayed());
+        TravelToPhase(EPartyPhase::Results);
+    }
+    else
+    {
+        UE_LOG(LogPartyButtons, Log,
+            TEXT("APartyMinigameGameMode: game %d/%d done — back to LevelSelect."),
+            S->GetGamesPlayed(), S->GetGamesPerSession());
+        TravelToPhase(EPartyPhase::LevelSelect);
     }
 }

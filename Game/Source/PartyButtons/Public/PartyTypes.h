@@ -40,6 +40,15 @@ struct PARTYBUTTONS_API FPartyGameInfo
     /** Short map package name, e.g. "L_GameA". Used for OpenLevel travel. */
     UPROPERTY(BlueprintReadOnly)
     FName MapName;
+
+    /**
+     * Optional per-game GameMode override, reflected class path (no 'A' prefix), e.g.
+     * "/Script/PartyButtons.PartyArenaGameMode". Empty means "use the shared
+     * PartyMinigameGameMode" (EPartyPhase::Minigame's route). Read by
+     * APartyGameModeBase::TravelToGame.
+     */
+    UPROPERTY(BlueprintReadOnly)
+    FString GameModeClassPath;
 };
 
 /**

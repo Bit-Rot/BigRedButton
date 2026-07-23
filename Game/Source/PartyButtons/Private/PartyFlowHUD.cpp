@@ -186,9 +186,9 @@ void APartyFlowHUD::DrawMinigame(APartyGameModeBase* GM)
 {
     DrawRect(FLinearColor(0.05f, 0.0f, 0.05f, 0.85f), 0.f, 0.f, Canvas->SizeX, Canvas->SizeY);
     const FString Title = GM ? GM->GetHudTitle() : TEXT("???");
+    const FString Subtitle = GM ? GM->GetHudSubtitle() : TEXT("");
     DrawCenteredText(Title, 150.f, FLinearColor(1.f, 0.9f, 0.1f, 1.f), 3.0f);
-    DrawCenteredText(TEXT("First to press wins!"), 280.f, FLinearColor(0.8f, 0.8f, 0.8f, 1.f), 1.5f);
-    DrawCenteredText(TEXT("(Press your button)"), 340.f, FLinearColor(0.5f, 0.5f, 0.5f, 1.f));
+    DrawCenteredText(Subtitle, 280.f, FLinearColor(0.8f, 0.8f, 0.8f, 1.f), 1.5f);
 }
 
 void APartyFlowHUD::DrawResults(const FPartySessionState& State)

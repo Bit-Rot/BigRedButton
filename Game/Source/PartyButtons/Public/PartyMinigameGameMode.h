@@ -34,13 +34,31 @@ protected:
     virtual void BeginPlay() override;
     virtual void OnPlayerButton(int32 PlayerIndex) override;
 
-private:
+    /**
+     * Record PlayerIndex's win, advance the session, and travel to Results
+     * (session complete) or back to LevelSelect. Shared by every minigame's
+     * win path — subclasses with different win conditions (e.g. last player
+     * standing) call this once they've determined the winner, instead of
+     * duplicating the record/advance/travel sequence.
+     */
+    virtual void DeclareWinner(int32 PlayerIndex);
+
+    /**
+     * Advance the session with no win recorded (e.g. a mutual-death draw),
+     * then travel exactly like DeclareWinner. Guarded the same way.
+     */
+    virtual void DeclareNoContest();
+
     /** Roster index of the current game, resolved in BeginPlay. */
     int32 CurrentRosterIndex = INDEX_NONE;
 
     /** Human-readable name cached in BeginPlay for the HUD. */
     FString CurrentGameName;
 
-    /** True once a winner has been declared; prevents double-fire. */
+    /** True once a winner (or no-contest) has been declared; prevents double-fire. */
     bool bWinnerDeclared = false;
+
+private:
+    /** Shared tail of DeclareWinner/DeclareNoContest: advance + travel. */
+    void AdvanceAndTravel();
 };

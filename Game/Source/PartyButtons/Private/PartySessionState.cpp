@@ -15,7 +15,7 @@ void FPartySessionState::InitDefaultRoster()
 {
     // 16 zany alliterative names, A–P (matching L_GameA..L_GameP).
     static const TCHAR* Names[NUM_PLAYERS] = {
-        TEXT("Avalanche Alley"),
+        TEXT("Reflex Rumble"),
         TEXT("Bumper Bonanza"),
         TEXT("Cannon Carnage"),
         TEXT("Dizzy Derby"),
@@ -42,6 +42,12 @@ void FPartySessionState::InitDefaultRoster()
         Info.MapName     = FName(*FString::Printf(TEXT("L_Game%c"), TEXT('A') + i));
         GameRoster.Add(Info);
     }
+
+    // Slot 0 (L_GameA / "Reflex Rumble") is the first real minigame — a spin,
+    // charge, and reflect duel — and uses its own GameMode instead of the
+    // shared "first press wins" APartyMinigameGameMode. Reflected class name,
+    // no 'A' prefix (see AI/design/architecture.md travel-wiring pitfall).
+    GameRoster[0].GameModeClassPath = TEXT("/Script/PartyButtons.PartyArenaGameMode");
 }
 
 void FPartySessionState::ResetSession()
