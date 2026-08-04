@@ -2,10 +2,12 @@
 #include "PartyButtons.h"
 #include "PartyArena.h"
 #include "PartyDuelPawn.h"
+#include "PartyBullet.h"
 #include "PartySessionSubsystem.h"
 #include "PartySessionState.h"
 #include "GameFramework/PlayerController.h"
 #include "Engine/World.h"
+#include "EngineUtils.h" // TActorIterator, used by ShouldBlockNow to scan live bullets
 
 APartyArenaGameMode::APartyArenaGameMode()
 {
@@ -121,6 +123,13 @@ void APartyArenaGameMode::SpawnPawns()
     FRandomStream Rng(static_cast<int32>(GetWorld()->GetUniqueID()) ^ 0x50415254);
     AIRng = FRandomStream(static_cast<int32>(GetWorld()->GetUniqueID()) ^ 0x41494152); // "AIR"
 
+    // Cached once so ricochet planning (PlanShot) knows how far bullets bounce
+    // off the wall surface without needing a live bullet instance to ask.
+    if (const APartyBullet* BulletCDO = GetDefault<APartyBullet>())
+    {
+        BulletRadiusUnitsForPlanning = BulletCDO->GetRadiusUnits();
+    }
+
     constexpr int32 MaxSpawnAttempts = 30;
     const float MinSepUnits = MinSpawnSeparationMeters * 100.f;
 
@@ -160,9 +169,15 @@ void APartyArenaGameMode::SpawnPawns()
 
         if (AIParticipants.Contains(PlayerIndex))
         {
+            const PartyDuelAI::FDuelAIParams AIParams = GetActiveAIParams();
+
             FDuelAIState& AIPawnState = AIState.FindOrAdd(PlayerIndex);
-            AIPawnState.bHolding      = false;
-            AIPawnState.NextEventTime = GetWorld()->GetTimeSeconds() + AIRng.FRandRange(AIThinkMinSeconds, AIThinkMaxSeconds);
+            AIPawnState.bHolding         = false;
+            AIPawnState.bPlanCommitted   = false;
+            AIPawnState.bBlockPending    = false;
+            // Staggered start so every AI pawn doesn't decide on the same frame.
+            AIPawnState.NextDecisionTime = GetWorld()->GetTimeSeconds()
+                + AIRng.FRandRange(AIParams.ReactionLatencySeconds, AIParams.ReactionLatencySeconds * 2.f);
         }
     }
 
@@ -175,6 +190,7 @@ void APartyArenaGameMode::TickAI(float DeltaSeconds)
     if (bWinnerDeclared || AIState.IsEmpty() || !GetWorld()) { return; }
 
     const double Now = GetWorld()->GetTimeSeconds();
+    const PartyDuelAI::FDuelAIParams Params = GetActiveAIParams();
 
     // Copy keys first: OnPlayerButton/OnPlayerButtonReleased below can lead to
     // a pawn dying (immediately or on a later tick) and HandlePawnDied mutating
@@ -185,23 +201,167 @@ void APartyArenaGameMode::TickAI(float DeltaSeconds)
     for (int32 PlayerIndex : Indices)
     {
         FDuelAIState* State = AIState.Find(PlayerIndex);
-        if (!State || Now < State->NextEventTime) { continue; }
+        TObjectPtr<APartyDuelPawn>* PawnPtr = Pawns.Find(PlayerIndex);
+        if (!State || !PawnPtr || !*PawnPtr) { continue; }
+        APartyDuelPawn& Pawn = **PawnPtr;
 
-        if (!State->bHolding)
-        {
-            // Same entry point real button input uses (via the delegate chain
-            // from APartyInputController) — see this method's class comment.
-            OnPlayerButton(PlayerIndex);
-            State->bHolding      = true;
-            State->NextEventTime = Now + AIRng.FRandRange(AIHoldMinSeconds, AIHoldMaxSeconds);
-        }
-        else
+        // ---- Finish a pending block tap (pressed last tick; release now — a
+        // one-tick hold is comfortably inside TapWindowSeconds, so it always
+        // classifies as Reflect, never Cancel). ----
+        if (State->bBlockPending)
         {
             OnPlayerButtonReleased(PlayerIndex);
-            State->bHolding      = false;
-            State->NextEventTime = Now + AIRng.FRandRange(AIThinkMinSeconds, AIThinkMaxSeconds);
+            State->bBlockPending    = false;
+            State->NextDecisionTime = Now + AIRng.FRandRange(Params.ReactionLatencySeconds, Params.ReactionLatencySeconds * 2.f);
+            continue;
+        }
+
+        // ---- Already charging a committed shot: just watch for release time. ----
+        if (State->bHolding)
+        {
+            if (Now >= State->PressTime + State->PlannedHoldSeconds)
+            {
+                OnPlayerButtonReleased(PlayerIndex);
+                State->bHolding      = false;
+                State->bPlanCommitted = false;
+                State->NextDecisionTime = Now + AIRng.FRandRange(Params.ReactionLatencySeconds, Params.ReactionLatencySeconds * 2.f);
+            }
+            continue; // can't block mid-charge — matches what a real player could do
+        }
+
+        // ---- Defense: only reachable while not charging, same as a human. ----
+        if (ShouldBlockNow(Pawn, Params))
+        {
+            OnPlayerButton(PlayerIndex); // quick tap; released next tick above
+            State->bBlockPending = true;
+            continue;
+        }
+
+        // ---- Offense: reaction-latency gate keeps this from re-deciding every frame. ----
+        if (Now < State->NextDecisionTime) { continue; }
+
+        if (!State->bPlanCommitted)
+        {
+            if (!PlanShot(PlayerIndex, Pawn, Params, Now, *State)) { continue; }
+            State->bPlanCommitted = true;
+        }
+
+        // Aiming == timing the press to the spin (see PartyDuelPawn — pressing
+        // freezes facing). Press once the spinning facing is within tolerance
+        // of the committed, jittered bearing.
+        const float FacingDeg = Pawn.GetActorRotation().Yaw;
+        if (FMath::Abs(PartyDuelAI::SignedAngleDeltaDeg(FacingDeg, State->PlannedBearingDeg)) <= Params.AimToleranceDeg)
+        {
+            OnPlayerButton(PlayerIndex);
+            State->bHolding  = true;
+            State->PressTime = Now;
         }
     }
+}
+
+PartyDuelAI::FDuelAIParams APartyArenaGameMode::GetActiveAIParams() const
+{
+    switch (AIDifficulty)
+    {
+    case EPartyAIDifficulty::Easy: return PartyDuelAI::EasyParams();
+    case EPartyAIDifficulty::Hard: return PartyDuelAI::HardParams();
+    case EPartyAIDifficulty::Medium:
+    default:                       return PartyDuelAI::MediumParams();
+    }
+}
+
+APartyDuelPawn* APartyArenaGameMode::FindNearestOpponent(int32 SelfIndex) const
+{
+    const TObjectPtr<APartyDuelPawn>* SelfPtr = Pawns.Find(SelfIndex);
+    if (!SelfPtr || !*SelfPtr) { return nullptr; }
+    const FVector SelfLoc = (*SelfPtr)->GetActorLocation();
+
+    APartyDuelPawn* Best = nullptr;
+    float BestDistSq = TNumericLimits<float>::Max();
+    for (int32 OtherIndex : AlivePlayers)
+    {
+        if (OtherIndex == SelfIndex) { continue; }
+        const TObjectPtr<APartyDuelPawn>* OtherPtr = Pawns.Find(OtherIndex);
+        if (!OtherPtr || !*OtherPtr) { continue; }
+
+        const float DistSq = FVector::DistSquared((*OtherPtr)->GetActorLocation(), SelfLoc);
+        if (DistSq < BestDistSq)
+        {
+            BestDistSq = DistSq;
+            Best = *OtherPtr;
+        }
+    }
+    return Best;
+}
+
+bool APartyArenaGameMode::ShouldBlockNow(const APartyDuelPawn& SelfPawn, const PartyDuelAI::FDuelAIParams& Params) const
+{
+    if (!GetWorld()) { return false; }
+
+    const FVector2D SelfPos2D(SelfPawn.GetActorLocation());
+    const float CombinedRadius = SelfPawn.GetSphereRadiusUnits() + BulletRadiusUnitsForPlanning;
+
+    for (TActorIterator<APartyBullet> It(GetWorld()); It; ++It)
+    {
+        APartyBullet* Bullet = *It;
+        if (!Bullet) { continue; }
+
+        // Don't try to block a bullet that's currently your own freshly-fired
+        // shot — a human wouldn't reflexively parry their own gunshot either.
+        if (Cast<APartyDuelPawn>(Bullet->GetOwner()) == &SelfPawn) { continue; }
+
+        const FVector2D BulletPos2D(Bullet->GetActorLocation());
+        const FVector2D BulletVel2D(Bullet->GetVelocity());
+
+        const float TimeToImpact = PartyDuelAI::TimeToImpactSeconds(BulletPos2D, BulletVel2D, SelfPos2D, CombinedRadius);
+        if (TimeToImpact < 0.f || TimeToImpact > Params.BlockThreatHorizonSeconds) { continue; }
+
+        if (AIRng.FRand() < Params.BlockWhenThreatenedProb)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool APartyArenaGameMode::PlanShot(int32 SelfIndex, const APartyDuelPawn& SelfPawn, const PartyDuelAI::FDuelAIParams& Params, double Now, FDuelAIState& State)
+{
+    APartyDuelPawn* Target = FindNearestOpponent(SelfIndex);
+    if (!Target) { return false; }
+
+    if (AIRng.FRand() > Params.FireProbability)
+    {
+        // Hesitate rather than re-rolling every frame — reads as a human
+        // pausing instead of an AI stuck in a decision loop.
+        State.NextDecisionTime = Now + AIRng.FRandRange(0.15f, 0.4f);
+        return false;
+    }
+
+    const FVector2D ShooterPos2D(SelfPawn.GetActorLocation());
+    const FVector2D TargetPos2D(Target->GetActorLocation());
+
+    float BearingDeg = PartyDuelAI::BearingDegXY(ShooterPos2D, TargetPos2D);
+
+    const bool bAttemptRicochet = Arena && AIRng.FRand() < Params.RicochetProbability;
+    if (bAttemptRicochet)
+    {
+        const float BulletRadiusMeters = BulletRadiusUnitsForPlanning / 100.f;
+        const FBox2D BounceBox = Arena->GetPlayBounds(BulletRadiusMeters);
+
+        float RicochetBearingDeg = BearingDeg;
+        if (PartyDuelAI::PlanRicochetBearing(ShooterPos2D, TargetPos2D, BounceBox, Params.MaxRicochetBounces, AIRng, RicochetBearingDeg))
+        {
+            BearingDeg = RicochetBearingDeg;
+        }
+        // else: geometry didn't work out (rare, near-degenerate positions) — fall back to the direct shot already computed above.
+    }
+
+    State.PlannedBearingDeg = PartyDuelAI::ApplyAimJitter(BearingDeg, Params.AimErrorStdDevDeg, AIRng);
+
+    const float ChargeFrac = FMath::Clamp(Params.PreferredChargeFrac + AIRng.FRandRange(-0.15f, 0.15f), 0.f, 1.f);
+    State.PlannedHoldSeconds = PartyDuelAI::HoldSecondsForChargeFrac(ChargeFrac, SelfPawn.GetMinChargeSeconds(), SelfPawn.GetMaxChargeSeconds());
+
+    return true;
 }
 
 FLinearColor APartyArenaGameMode::PlayerColor(int32 PlayerIndex)

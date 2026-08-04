@@ -2,11 +2,22 @@
 
 #include "CoreMinimal.h"
 #include "PartyMinigameGameMode.h"
+#include "PartyDuelAI.h"
 #include "Math/RandomStream.h"
 #include "PartyArenaGameMode.generated.h"
 
 class APartyArena;
 class APartyDuelPawn;
+class APartyBullet;
+
+/** Selects an FDuelAIParams behavior profile (PartyDuelAI::EasyParams/MediumParams/HardParams). */
+UENUM()
+enum class EPartyAIDifficulty : uint8
+{
+    Easy,
+    Medium,
+    Hard,
+};
 
 /**
  * APartyArenaGameMode
@@ -28,11 +39,15 @@ class APartyDuelPawn;
  *      through the Lobby.
  *   3. Player button events are routed to the matching pawn by PlayerIndex
  *      (pawns are never possessed — see APartyDuelPawn's class comment).
- *   4. AI-controlled pawns are driven by TickAI, a simple randomized
- *      press/release timer that calls THIS CLASS's own OnPlayerButton/
- *      OnPlayerButtonReleased — the exact same entry point real button input
- *      uses. AI never touches a pawn directly, so it can't do anything a real
- *      player couldn't (see TickAI's comment for why this matters).
+ *   4. AI-controlled pawns are driven by TickAI, a reflex state machine (see
+ *      PartyDuelAI.h for the pure decision math) that calls THIS CLASS's own
+ *      OnPlayerButton/OnPlayerButtonReleased — the exact same entry point real
+ *      button input uses. AI never touches a pawn directly, so it can't do
+ *      anything a real player couldn't (see TickAI's comment for why this
+ *      matters). Behavior — aim error, reaction latency, fire cadence,
+ *      ricochet chance, block chance — is fully tunable via FDuelAIParams and
+ *      selected per-round by AIDifficulty (Easy/Medium/Hard); Medium is tuned
+ *      to be believable and beatable, not an aimbot.
  */
 UCLASS()
 class PARTYBUTTONS_API APartyArenaGameMode : public APartyMinigameGameMode
@@ -50,10 +65,12 @@ protected:
     virtual void OnPlayerButtonReleased(int32 PlayerIndex) override;
 
     /**
-     * Drives every AI-controlled duel pawn through a simple randomized
-     * press/release timer (see FDuelAIState / AIState). Intentionally naive —
-     * no aiming or positional awareness, just timed charge-and-release — this
-     * is a first pass meant for solo testing, not a "smart" opponent.
+     * Drives every AI-controlled duel pawn through a reflex state machine:
+     * defend first (block a threatening bullet if in range and the block-
+     * chance roll passes), otherwise plan and take a shot (direct or
+     * ricochet, aimed with jitter, timed to the pawn's spin) — see
+     * PartyDuelAI.h for the underlying pure math and FDuelAIState below for
+     * the per-pawn plan/timer state.
      *
      * CRITICAL: this must call OnPlayerButton(i)/OnPlayerButtonReleased(i) —
      * this class's OWN overridden methods, the exact entry point real button
@@ -82,22 +99,9 @@ protected:
     UPROPERTY(EditDefaultsOnly, Category = "PartyArena")
     float PlayerRadiusMeters = 0.25f;
 
-    // ---- AI tunables (dev-only testing aid) --------------------------------
-    // The pawn's own charge tunables (MinChargeSeconds etc.) are private, so
-    // AI gets its own hold range here. Kept above the pawn's 0.5s MinChargeSeconds
-    // so the AI mostly fires real shots instead of cancelling.
-
+    /** Behavior profile for every AI pawn this round — see PartyDuelAI::EasyParams/MediumParams/HardParams. */
     UPROPERTY(EditDefaultsOnly, Category = "PartyArena|AI")
-    float AIThinkMinSeconds = 0.5f;
-
-    UPROPERTY(EditDefaultsOnly, Category = "PartyArena|AI")
-    float AIThinkMaxSeconds = 2.0f;
-
-    UPROPERTY(EditDefaultsOnly, Category = "PartyArena|AI")
-    float AIHoldMinSeconds = 0.6f;
-
-    UPROPERTY(EditDefaultsOnly, Category = "PartyArena|AI")
-    float AIHoldMaxSeconds = 1.8f;
+    EPartyAIDifficulty AIDifficulty = EPartyAIDifficulty::Medium;
 
 private:
     void SpawnArena();
@@ -106,6 +110,20 @@ private:
 
     /** Deterministic-enough distinct color per player index, for the pawn tint. */
     static FLinearColor PlayerColor(int32 PlayerIndex);
+
+    /** Nearest living opponent to SelfIndex, or nullptr if none (degenerate round). */
+    APartyDuelPawn* FindNearestOpponent(int32 SelfIndex) const;
+
+    /** Resolves AIDifficulty to its FDuelAIParams profile — shared by SpawnPawns (initial stagger) and TickAI. */
+    PartyDuelAI::FDuelAIParams GetActiveAIParams() const;
+
+    struct FDuelAIState;
+
+    /** If a bullet threatens SelfPawn within the block horizon and the block-chance roll passes, returns true. */
+    bool ShouldBlockNow(const APartyDuelPawn& SelfPawn, const PartyDuelAI::FDuelAIParams& Params) const;
+
+    /** Picks a target, decides direct-vs-ricochet, aims (with jitter), and commits a shot plan into State. Returns false if no shot was committed (no target, or the fire-chance roll failed). */
+    bool PlanShot(int32 SelfIndex, const APartyDuelPawn& SelfPawn, const PartyDuelAI::FDuelAIParams& Params, double Now, FDuelAIState& State);
 
     UPROPERTY()
     TObjectPtr<APartyArena> Arena;
@@ -118,14 +136,27 @@ private:
     /** Subset of Pawns' keys that are AI-controlled (vs. human), fixed for the round at spawn time. */
     TSet<int32> AIParticipants;
 
-    /** Per-AI-pawn randomized press/release timer state — see TickAI. */
+    /** Per-AI-pawn reflex state: current shot plan/charge timer, and a pending defensive block tap. */
     struct FDuelAIState
     {
-        double NextEventTime = 0.0;
-        bool   bHolding      = false;
+        // ---- Offense: the currently committed shot plan, if any ----
+        bool   bPlanCommitted    = false;
+        float  PlannedBearingDeg = 0.f;
+        float  PlannedHoldSeconds = 0.f;
+        bool   bHolding          = false;
+        double PressTime         = 0.0;
+
+        /** Reaction-latency gate: no new plan/decision before this time. */
+        double NextDecisionTime  = 0.0;
+
+        // ---- Defense: a block tap in progress (pressed this tick, release next) ----
+        bool   bBlockPending     = false;
     };
     TMap<int32, FDuelAIState> AIState;
 
-    /** Random stream reused by TickAI for AI timing decisions. */
+    /** Random stream reused by TickAI for all AI decisions (targeting, jitter, wall choice). */
     FRandomStream AIRng;
+
+    /** Bullet collision radius (units/cm), cached once for ricochet-bounce-box math — see SpawnPawns. */
+    float BulletRadiusUnitsForPlanning = 8.f;
 };

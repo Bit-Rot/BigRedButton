@@ -51,6 +51,18 @@ public:
 
     int32 GetPlayerIndex() const { return PlayerIndex; }
 
+    // ---- Read-only accessors for APartyArenaGameMode::TickAI (see PartyDuelAI.h) ----
+    // AI is allowed to READ these — a human sees exactly the same info on the
+    // top-down camera (spin rate, roughly how long a charge takes, own size) —
+    // it just may never WRITE pawn state directly (see class comment).
+
+    float GetIdleSpinRateDegPerSec() const { return IdleSpinRateDegPerSec; }
+    float GetMinChargeSeconds() const { return MinChargeSeconds; }
+    float GetMaxChargeSeconds() const { return MaxChargeSeconds; }
+
+    /** Collision sphere radius in Unreal units (cm), e.g. for AI ricochet/impact math. */
+    float GetSphereRadiusUnits() const { return SphereRadiusMeters * 100.f; }
+
     /** Forwarded from APartyArenaGameMode::OnPlayerButton. */
     void NotifyPressed();
 

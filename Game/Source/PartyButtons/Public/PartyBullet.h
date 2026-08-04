@@ -46,6 +46,9 @@ public:
     /** Current flight velocity — read by the reflecting pawn to compute the bounce. */
     FVector GetVelocity() const;
 
+    /** Collision sphere radius in Unreal units (cm), e.g. for AI ricochet/impact math. */
+    float GetRadiusUnits() const { return RadiusMeters * 100.f; }
+
 protected:
     virtual void BeginPlay() override;
 
