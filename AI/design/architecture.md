@@ -141,6 +141,37 @@ HUD's first `DrawHUD` reads the correct phase immediately. All travel calls are
 deferred one tick (via `SetTimerForNextTick`) to avoid calling `OpenLevel` from
 inside `BeginPlay` or a delegate handler.
 
+### OctoOdyssey (roster slot 2 / L_GameC)
+
+A QWOP-style co-op physics game — up to 8 players each control one arm of a
+single shared `AOctoPawn`. Button i extends arm i fast; releasing retracts
+it. Pushing arms against level geometry is the only way to move; motion is
+confined to the Y-Z plane (`EDOFMode::YZPlane`), rotation only about X.
+Reaching the goal flag reloads L_GameC — this game deliberately never calls
+`DeclareWinner`/`DeclareNoContest` and never rejoins the LevelSelect/Results
+flow (see `AOctoGameMode::ReloadCourse`'s comment).
+
+All OctoOdyssey code lives under its own subfolder (not flat in the module
+root like Reflex Rumble) — `Public/OctoOdyssey/` + `Private/OctoOdyssey/`,
+classes prefixed `AOcto*`/`FOcto*`/namespace `OctoArm`:
+
+| File | Role |
+|---|---|
+| `Public/OctoOdyssey/OctoArmMath.h` + `Private/` | Pure, world-free arm geometry math (`namespace OctoArm`) — direction, extension, launch impulse, all unit-tested |
+| `Public/OctoOdyssey/OctoPawn.h` + `Private/` | `AOctoPawn` — the octopus: one simulating `USphereComponent` body + 8 welded `UCapsuleComponent` arms + non-colliding visual meshes |
+| `Public/OctoOdyssey/OctoGameMode.h` + `Private/` | `AOctoGameMode` — spawns the octopus/camera, routes the first 8 buttons to arms, reloads on goal |
+| `Public/OctoOdyssey/OctoCamera.h` + `Private/` | `AOctoCamera` — side-on follow camera (looks along +X at the Y-Z play plane) |
+| `Public/OctoOdyssey/OctoGoalFlag.h` + `Private/` | `AOctoGoalFlag` — placeable overlap trigger, broadcasts `OnReached` |
+| `Public/OctoOdyssey/OctoSpawnPoint.h` + `Private/` | `AOctoSpawnPoint` — placeable spawn marker |
+| `Private/OctoOdyssey/Tests/OctoArmMathTest.cpp` | `OctoArm::` unit tests (11 tests) |
+| `Private/OctoOdyssey/Tests/OctoRosterTest.cpp` | Roster slot-2 wiring guard |
+| `AI/build_octo_course.py` | Headless Python script that places the L_GameC greybox course (blocks, flag, spawn point, lights) — see its own docstring |
+
+Registered exactly like slot 0: `FPartySessionState::InitDefaultRoster`
+(`PartySessionState.cpp`) sets `GameRoster[2].GameModeClassPath =
+"/Script/PartyButtons.OctoGameMode"` (reflected name, no `A` prefix — same
+pitfall as slot 0).
+
 ### New files (added with map-flow scaffold)
 
 | File | Role |

@@ -48,6 +48,12 @@ void FPartySessionState::InitDefaultRoster()
     // shared "first press wins" APartyMinigameGameMode. Reflected class name,
     // no 'A' prefix (see AI/design/architecture.md travel-wiring pitfall).
     GameRoster[0].GameModeClassPath = TEXT("/Script/PartyButtons.PartyArenaGameMode");
+
+    // Slot 2 (L_GameC / "Octo Odyssey") is the second real minigame — a
+    // QWOP-style co-op physics game — and likewise overrides the shared
+    // GameMode. Reflected class name, no 'A' prefix (same pitfall as above).
+    GameRoster[2].DisplayName        = TEXT("Octo Odyssey");
+    GameRoster[2].GameModeClassPath  = TEXT("/Script/PartyButtons.OctoGameMode");
 }
 
 void FPartySessionState::ResetSession()

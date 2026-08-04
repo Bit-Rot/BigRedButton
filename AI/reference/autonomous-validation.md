@@ -52,10 +52,21 @@ Run via Bash tool with `timeout: 600000`.
 Pass condition: `Tests Failed: 0` and `succeeded > 0` in the JSON report at
 `Game/Saved/Automation/Reports/index.json`.
 
-Test suite: `PartyButtons.Input.Dispatch.*`
-- `BuildsSixteenDistinctActions` — 16 non-null distinct actions + 16-mapping IMC
-- `RoutesEachButtonToItsIndex` — IndexOfByKey[k] == k for all 16; FInputActionInstance pathway
-- `RejectsUnknownAction` — unknown/null action → INDEX_NONE
+Test suites (non-exhaustive — grep the report for the full list):
+- `PartyButtons.Input.Dispatch.*` — 16 non-null distinct actions + 16-mapping
+  IMC, IndexOfByKey[k] == k routing, unknown-action rejection
+- `PartyButtons.Input.MainButton.*` — button-17 invariant, mappings, tap/hold
+- `PartyButtons.Session.*`, `PartyButtons.Duel.*`, `PartyButtons.Flow.*` — game-module unit tests
+- `PartyButtons.Octo.ArmMath.*` (11 tests) — OctoOdyssey's pure arm-geometry
+  math: direction/spacing, the engine-Roll-convention pin
+  (`ArmDirectionWorldMatchesRollRotation`), extension invariants, launch impulse
+- `PartyButtons.Octo.Roster.SlotTwoIsOctoOdyssey` — roster slot 2 wiring guard
+
+**Known pre-existing failure (unrelated to any of the above):**
+`PartyButtons.Input.Dispatch.MapsKeyboardEmulationKeys`
+(`PartyInputDispatchTest.cpp`) asserts a stale keyboard-emulation layout that
+no longer matches `PartyInputController.cpp`'s shipping table. If this is the
+ONLY failure in the report, that's expected — not a regression from your change.
 
 ---
 
@@ -76,6 +87,31 @@ Run once; the map is a binary `.umap` asset. Re-run only if the map is deleted.
 
 ---
 
+## 4b. Build the OctoOdyssey course (headless Python, re-runnable)
+
+Places the L_GameC greybox course (blocks, goal flag, spawn point, lights) —
+requires the PartyButtons module to already be built (spawns
+`unreal.OctoGoalFlag`/`unreal.OctoSpawnPoint`, only bound once those classes
+compile). Idempotent by rebuild: every run clears its own tagged actors
+first, so it's safe to re-run after tuning `AI/build_octo_course.py`'s
+`BLOCKS`/`LIGHTS` tables.
+
+```bash
+"C:/Program Files/Epic Games/UE_5.7/Engine/Binaries/Win64/UnrealEditor-Cmd.exe" \
+  "C:/Users/BitRot/BigRedButton/Game/PartyButtons.uproject" \
+  -run=pythonscript \
+  -script="C:/Users/BitRot/BigRedButton/AI/build_octo_course.py" \
+  -unattended -nopause -NoSplash -log 2>&1 \
+  | grep -E "error|Error|warning|saved|build_octo_course"
+```
+
+If this fails with an unknown-commandlet/module error, `PythonScriptPlugin`
+may need adding to `PartyButtons.uproject`'s `Plugins` array (it is
+`EnabledByDefault: false` at the engine level; `bootstrap_map.py` working
+implies it's already active for this project, but check first).
+
+---
+
 ## 5. Headless game launch (verify demo loads, no hardware needed)
 
 ```bash
@@ -88,6 +124,24 @@ Run once; the map is a binary `.umap` asset. Re-run only if the map is deleted.
 Or use the run-and-grep pattern for unattended verification:
 Look for `LogPartyInput` lines and `LogPartyButtons` startup — confirms GameMode +
 HUD wired correctly.
+
+### 5b. Headless launch straight into L_GameC (OctoOdyssey)
+
+Bypasses the whole menu/lobby flow by passing the map + `?game=` option
+directly on the command line — the same mechanism `AOctoGameMode::ReloadCourse`
+uses internally:
+
+```bash
+"C:/Program Files/Epic Games/UE_5.7/Engine/Binaries/Win64/UnrealEditor.exe" \
+  "C:/Users/BitRot/BigRedButton/Game/PartyButtons.uproject" \
+  "L_GameC?game=/Script/PartyButtons.OctoGameMode" \
+  -game -log -windowed -ResX=1280 -ResY=720 -NoSplash -unattended 2>&1 | head -150
+```
+
+Expect a `LogPartyButtons: ... running game 2 — Octo Odyssey.` line and no
+`could not find roster entry` warning — that warning's absence confirms the
+`?game=` class path string is correct (getting it wrong silently falls back
+to `GlobalDefaultGameMode` with no error — see `PartyFlowRouter.h`).
 
 ---
 
