@@ -9,6 +9,7 @@
 class APartyArena;
 class APartyDuelPawn;
 class APartyBullet;
+class USoundBase;
 
 /** Selects an FDuelAIParams behavior profile (PartyDuelAI::EasyParams/MediumParams/HardParams). */
 UENUM()
@@ -59,8 +60,14 @@ public:
 
     virtual FString GetHudSubtitle() const override;
 
+    // ---- Intro overlay (tutorial + discovery) --------------------------------
+    virtual EPartyOverlayPhase        GetOverlayPhase() const override;
+    virtual float                     GetTutorialRemainingSeconds() const override;
+    virtual TArray<FPartyPawnMarker>  GetPawnMarkers() const override;
+
 protected:
     virtual void BeginPlay() override;
+    virtual void Tick(float DeltaSeconds) override;
     virtual void OnPlayerButton(int32 PlayerIndex) override;
     virtual void OnPlayerButtonReleased(int32 PlayerIndex) override;
 
@@ -103,10 +110,36 @@ protected:
     UPROPERTY(EditDefaultsOnly, Category = "PartyArena|AI")
     EPartyAIDifficulty AIDifficulty = EPartyAIDifficulty::Medium;
 
+    // ---- Intro overlay tunables ---------------------------------------------
+    // Tutorial dismisses at whichever comes first: TutorialMaxSeconds elapsed,
+    // OR every human participant is currently holding their button.
+
+    UPROPERTY(EditDefaultsOnly, Category = "PartyArena|Intro")
+    float TutorialMaxSeconds = 5.f;
+
+    UPROPERTY(EditDefaultsOnly, Category = "PartyArena|Intro")
+    float DiscoverySeconds = 3.f;
+
+    /** Countdown one-shot for the two lead-in beeps. */
+    UPROPERTY(EditDefaultsOnly, Category = "PartyArena|Intro")
+    TObjectPtr<USoundBase> BeepSound;
+
+    /** Countdown one-shot for the final "BOOOP" — game starts as this plays. */
+    UPROPERTY(EditDefaultsOnly, Category = "PartyArena|Intro")
+    TObjectPtr<USoundBase> BoopSound;
+
 private:
+    enum class ESubPhase : uint8 { Tutorial, Discovery, Playing };
+
     void SpawnArena();
     void SpawnPawns();
     void HandlePawnDied(int32 PlayerIndex);
+
+    void EnterDiscovery();
+    void EnterPlaying();
+    void SetPawnsFrozen(bool bFrozen);
+    void PlayCountdownBeat(bool bIsBoop);
+    bool AllHumansHolding() const;
 
     /** Deterministic-enough distinct color per player index, for the pawn tint. */
     static FLinearColor PlayerColor(int32 PlayerIndex);
@@ -159,4 +192,11 @@ private:
 
     /** Bullet collision radius (units/cm), cached once for ricochet-bounce-box math — see SpawnPawns. */
     float BulletRadiusUnitsForPlanning = 8.f;
+
+    // ---- Intro overlay state -------------------------------------------------
+    ESubPhase   SubPhase        = ESubPhase::Tutorial;
+    float       SubPhaseElapsed = 0.f;
+    TSet<int32> HeldButtons;         // any participant currently holding — for tutorial gate + discovery tint
+    TSet<int32> HumanParticipants;   // subset of Pawns keys that are NOT AI — used by AllHumansHolding
+    int32       NextCountdownBeat = 0;
 };

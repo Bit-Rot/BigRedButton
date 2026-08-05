@@ -192,11 +192,113 @@ void APartyFlowHUD::DrawLevelSelect(APartyGameModeBase* GM, const FPartySessionS
 
 void APartyFlowHUD::DrawMinigame(APartyGameModeBase* GM)
 {
+    // Games that don't opt in to the intro overlay (default) keep the legacy
+    // full-screen title + subtitle. Opt-in games (see APartyArenaGameMode) get
+    // a dialog during tutorial, floating number labels during discovery, and
+    // no HUD overlay at all once play begins.
+    const EPartyOverlayPhase OverlayPhase = GM
+        ? GM->GetOverlayPhase()
+        : EPartyOverlayPhase::None;
+
+    switch (OverlayPhase)
+    {
+    case EPartyOverlayPhase::Tutorial:
+        DrawTutorialDialog(GM);
+        return;
+
+    case EPartyOverlayPhase::Discovery:
+        DrawPawnMarkers(GM);
+        return;
+
+    case EPartyOverlayPhase::Playing:
+        // Arena is live — draw nothing over it.
+        return;
+
+    case EPartyOverlayPhase::None:
+    default:
+        break;
+    }
+
     DrawRect(FLinearColor(0.05f, 0.0f, 0.05f, 0.85f), 0.f, 0.f, Canvas->SizeX, Canvas->SizeY);
     const FString Title = GM ? GM->GetHudTitle() : TEXT("???");
     const FString Subtitle = GM ? GM->GetHudSubtitle() : TEXT("");
     DrawCenteredText(Title, 150.f, FLinearColor(1.f, 0.9f, 0.1f, 1.f), 3.0f);
     DrawCenteredText(Subtitle, 280.f, FLinearColor(0.8f, 0.8f, 0.8f, 1.f), 1.5f);
+}
+
+void APartyFlowHUD::DrawTutorialDialog(APartyGameModeBase* GM)
+{
+    if (!Canvas || !GM) { return; }
+
+    // Subtle dim so the arena is visibly behind the dialog (spec: this is a
+    // dialog, not a full-screen takeover).
+    DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.45f), 0.f, 0.f, Canvas->SizeX, Canvas->SizeY);
+
+    const float DialogW = FMath::Min(Canvas->SizeX * 0.7f, 820.f);
+    const float DialogH = 260.f;
+    const float DialogX = (Canvas->SizeX - DialogW) * 0.5f;
+    const float DialogY = (Canvas->SizeY - DialogH) * 0.5f;
+
+    DrawRect(FLinearColor(0.05f, 0.05f, 0.10f, 0.95f), DialogX, DialogY, DialogW, DialogH);
+
+    const FLinearColor Border(0.85f, 0.75f, 0.15f, 1.f);
+    DrawLine(DialogX,           DialogY,           DialogX + DialogW, DialogY,           Border);
+    DrawLine(DialogX + DialogW, DialogY,           DialogX + DialogW, DialogY + DialogH, Border);
+    DrawLine(DialogX + DialogW, DialogY + DialogH, DialogX,           DialogY + DialogH, Border);
+    DrawLine(DialogX,           DialogY + DialogH, DialogX,           DialogY,           Border);
+
+    const FString Title       = GM->GetHudTitle();
+    const FString Instructions = GM->GetTutorialText();
+    const float   Remaining   = GM->GetTutorialRemainingSeconds();
+
+    DrawCenteredText(Title,        DialogY + 24.f,  FLinearColor(1.f, 0.9f, 0.1f, 1.f), 2.0f);
+    DrawCenteredText(Instructions, DialogY + 105.f, FLinearColor(0.9f, 0.9f, 0.9f, 1.f), 1.3f);
+
+    const FString Prompt = (Remaining >= 0.f)
+        ? FString::Printf(TEXT("Hold your button to start   (auto-start in %.1fs)"), Remaining)
+        : FString(TEXT("Hold your button to start"));
+    DrawCenteredText(Prompt, DialogY + 195.f, FLinearColor(0.4f, 1.0f, 0.5f, 1.f), 1.3f);
+}
+
+void APartyFlowHUD::DrawPawnMarkers(APartyGameModeBase* GM)
+{
+    if (!Canvas || !GM) { return; }
+
+    const TArray<FPartyPawnMarker> Markers = GM->GetPawnMarkers();
+    UFont* Font = GEngine ? GEngine->GetLargeFont() : nullptr;
+
+    for (const FPartyPawnMarker& M : Markers)
+    {
+        // Project falls back to (0,0,-1) style outputs when the point is
+        // behind the camera — Z <= 0 filters those out safely.
+        const FVector Screen = Project(M.WorldLocation);
+        if (Screen.Z <= 0.f) { continue; }
+
+        const FString Label = FString::Printf(TEXT("%d"), M.PlayerIndex + 1);
+
+        // Held → bright white flash, otherwise the player's assigned tint so
+        // "which one is me?" is answerable at a glance during discovery.
+        const FLinearColor Color = M.bHeld
+            ? FLinearColor(1.f, 1.f, 1.f, 1.f)
+            : M.Color;
+
+        constexpr float LabelScale = 2.2f;
+        float TextW = 0.f, TextH = 0.f;
+        if (Font)
+        {
+            Canvas->TextSize(Font, Label, TextW, TextH, LabelScale, LabelScale);
+        }
+        else
+        {
+            TextW = 22.f * LabelScale;
+            TextH = 22.f * LabelScale;
+        }
+
+        const float X = Screen.X - TextW * 0.5f;
+        const float Y = Screen.Y - TextH - 40.f; // hover above the pawn's projected center
+
+        DrawText(Label, Color, X, Y, Font, LabelScale);
+    }
 }
 
 void APartyFlowHUD::DrawResults(const FPartySessionState& State)

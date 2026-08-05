@@ -11,11 +11,11 @@
  * Used by L_Lobby. Players press their button to register for the session.
  *
  * Rules:
- *   - When the FIRST button is pressed, a 1-second countdown timer starts.
+ *   - When MIN_PLAYERS humans are simultaneously holding, the countdown starts.
  *   - Any player pressing their button during the window registers them.
  *   - At countdown expiry, all registered players advance to LevelSelect.
- *   - If nobody has registered when the timer would fire (edge case guard),
- *     the timer is restarted on the next press.
+ *   - AI slots fill in downstream but never gate the countdown — a solo dev
+ *     with AI turned up still has to physically hold two buttons to start.
  *   - Main button hold → back to MainMenu.
  *
  * HUD: 4×4 grid with registered players lit; countdown remaining shown.
@@ -45,26 +45,18 @@ protected:
     virtual void OnPlayerButtonReleased(int32 PlayerIndex) override;
     virtual void OnMainHold() override;
 
-    /** Dev-only Up/Down: adjust the AI player count, then recheck the countdown threshold. */
+    /** Dev-only Up/Down: adjust the AI player count. Does NOT affect the start countdown. */
     virtual void OnDevIncrement() override;
     virtual void OnDevDecrement() override;
 
 private:
     void OnCountdownComplete();
 
-    /** Recheck timer state after any press/release/AI-count change: start if held+AI >= MIN_PLAYERS, stop if below. */
+    /** Recheck timer state after any press/release: start if humans held >= MIN_PLAYERS, stop if below. */
     void RecheckTimer();
 
     /** Count of buttons currently held down. */
     int32 GetActiveHeldCount() const;
-
-    /**
-     * Number of AI slots currently in effect against the live held-button set
-     * (i.e., ComputeAISlots(bButtonHeld, NumAIPlayers, ...) true-count). Used
-     * so AI counts toward the Lobby's start/complete thresholds alongside
-     * physically-held buttons.
-     */
-    int32 GetEffectiveAICount() const;
 
     FTimerHandle CountdownTimer;
     bool  bCountingDown    = false;

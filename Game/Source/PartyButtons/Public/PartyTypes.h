@@ -52,6 +52,38 @@ struct PARTYBUTTONS_API FPartyGameInfo
 };
 
 /**
+ * Sub-phase for a minigame that opts into a tutorial/discovery intro before
+ * gameplay proper. Consumed by APartyFlowHUD::DrawMinigame to switch drawing
+ * modes. Games that don't opt in return EPartyOverlayPhase::None from
+ * APartyGameModeBase::GetOverlayPhase (the default) and get the legacy
+ * full-screen title + subtitle overlay.
+ */
+UENUM(BlueprintType)
+enum class EPartyOverlayPhase : uint8
+{
+    None      UMETA(DisplayName = "None"),      // legacy: full-screen title/subtitle
+    Tutorial  UMETA(DisplayName = "Tutorial"),  // centered dialog, gameplay frozen
+    Discovery UMETA(DisplayName = "Discovery"), // numbers above pawns, countdown beeps
+    Playing   UMETA(DisplayName = "Playing"),   // no overlay — arena is live
+};
+
+/**
+ * One number-above-pawn marker projected by APartyFlowHUD during the discovery
+ * phase (see APartyArenaGameMode). WorldLocation is projected to screen space;
+ * bHeld toggles the number's color to indicate "yes, that's your button."
+ */
+USTRUCT()
+struct PARTYBUTTONS_API FPartyPawnMarker
+{
+    GENERATED_BODY()
+
+    UPROPERTY() FVector       WorldLocation = FVector::ZeroVector;
+    UPROPERTY() int32         PlayerIndex   = INDEX_NONE;
+    UPROPERTY() FLinearColor  Color         = FLinearColor::White;
+    UPROPERTY() bool          bHeld         = false;
+};
+
+/**
  * Maps a phase (or a specific game map) to its travel destination.
  * Returned by PartyFlow::GetRoute(); used by APartyGameModeBase::TravelToPhase.
  *

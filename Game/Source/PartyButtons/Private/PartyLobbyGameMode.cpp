@@ -95,7 +95,7 @@ void APartyLobbyGameMode::OnDevIncrement()
         S->IncrementAI();
         UE_LOG(LogPartyButtons, Log, TEXT("APartyLobbyGameMode: AI count -> %d."), S->GetNumAIPlayers());
     }
-    RecheckTimer();
+    // AI count no longer affects the countdown — only the HUD's tile shading.
 }
 
 void APartyLobbyGameMode::OnDevDecrement()
@@ -105,7 +105,6 @@ void APartyLobbyGameMode::OnDevDecrement()
         S->DecrementAI();
         UE_LOG(LogPartyButtons, Log, TEXT("APartyLobbyGameMode: AI count -> %d."), S->GetNumAIPlayers());
     }
-    RecheckTimer();
 }
 
 // ---- Timer management ------------------------------------------------------
@@ -117,27 +116,12 @@ int32 APartyLobbyGameMode::GetActiveHeldCount() const
     return Count;
 }
 
-int32 APartyLobbyGameMode::GetEffectiveAICount() const
-{
-    const UPartySessionSubsystem* S = Session();
-    if (!S) { return 0; }
-
-    TArray<bool> AISlots;
-    FPartySessionState::ComputeAISlots(bButtonHeld, S->GetNumAIPlayers(), AISlots);
-
-    int32 Count = 0;
-    for (bool b : AISlots) { if (b) { ++Count; } }
-    return Count;
-}
-
 void APartyLobbyGameMode::RecheckTimer()
 {
-    const int32 Held  = GetActiveHeldCount();
-    const int32 Total = Held + GetEffectiveAICount();
+    const int32 Held = GetActiveHeldCount();
 
-    if (Total >= MIN_PLAYERS && !bCountingDown)
+    if (Held >= MIN_PLAYERS && !bCountingDown)
     {
-        // Enough players (held + AI) — start the countdown.
         bCountingDown    = true;
         CountdownEndTime = GetWorld()->GetTimeSeconds() + LOBBY_COUNTDOWN;
 
@@ -149,17 +133,16 @@ void APartyLobbyGameMode::RecheckTimer()
             /*bLooping=*/false);
 
         UE_LOG(LogPartyButtons, Log,
-            TEXT("APartyLobbyGameMode: %d held + AI (total %d) — countdown started (%.1fs)."),
-            Held, Total, (float)LOBBY_COUNTDOWN);
+            TEXT("APartyLobbyGameMode: %d human(s) holding — countdown started (%.1fs)."),
+            Held, (float)LOBBY_COUNTDOWN);
     }
-    else if (Total < MIN_PLAYERS && bCountingDown)
+    else if (Held < MIN_PLAYERS && bCountingDown)
     {
-        // Too few players (held + AI) — reset the countdown.
         GetWorldTimerManager().ClearTimer(CountdownTimer);
         bCountingDown = false;
 
         UE_LOG(LogPartyButtons, Log,
-            TEXT("APartyLobbyGameMode: dropped to %d held + AI (total %d) — countdown reset."), Held, Total);
+            TEXT("APartyLobbyGameMode: dropped to %d human(s) — countdown reset."), Held);
     }
 }
 
@@ -167,14 +150,13 @@ void APartyLobbyGameMode::OnCountdownComplete()
 {
     bCountingDown = false;
 
-    const int32 Held  = GetActiveHeldCount();
-    const int32 Total = Held + GetEffectiveAICount();
-    if (Total < MIN_PLAYERS)
+    const int32 Held = GetActiveHeldCount();
+    if (Held < MIN_PLAYERS)
     {
         // Shouldn't happen (RecheckTimer would have cleared the timer), but guard anyway.
         UE_LOG(LogPartyButtons, Warning,
-            TEXT("APartyLobbyGameMode: countdown complete but only %d held + AI (total %d) — ignoring."),
-            Held, Total);
+            TEXT("APartyLobbyGameMode: countdown complete but only %d human(s) — ignoring."),
+            Held);
         return;
     }
 

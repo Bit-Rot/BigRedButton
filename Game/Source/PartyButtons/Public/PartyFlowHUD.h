@@ -48,6 +48,10 @@ private:
     void DrawMinigame(APartyGameModeBase* GM);
     void DrawResults(const FPartySessionState& State);
 
+    // Intro-overlay draw paths for minigames that opt in via GetOverlayPhase.
+    void DrawTutorialDialog(APartyGameModeBase* GM);
+    void DrawPawnMarkers(APartyGameModeBase* GM);
+
     /**
      * Draw the 4×4 grid of tiles.
      * IsLit(i) controls the cell background color (human/joined — green).

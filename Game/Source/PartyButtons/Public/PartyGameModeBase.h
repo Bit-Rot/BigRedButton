@@ -74,6 +74,27 @@ public:
      */
     virtual int32 GetSelectionIndex() const { return INDEX_NONE; }
 
+    // ---- Optional minigame intro overlay (tutorial + discovery) ---------------
+    //
+    // A minigame can opt in by overriding GetOverlayPhase to return something
+    // other than None. Games that don't opt in keep the legacy full-screen
+    // title + subtitle draw path in APartyFlowHUD::DrawMinigame.
+
+    /** Which sub-phase of the minigame intro overlay is active (default: opt-out). */
+    virtual EPartyOverlayPhase GetOverlayPhase() const { return EPartyOverlayPhase::None; }
+
+    /** Body text for the tutorial dialog (defaults to GetHudSubtitle()). */
+    virtual FString GetTutorialText() const { return GetHudSubtitle(); }
+
+    /** Seconds left on the tutorial auto-dismiss timer, or -1 if not applicable. */
+    virtual float GetTutorialRemainingSeconds() const { return -1.f; }
+
+    /**
+     * One entry per participating pawn, used by the HUD to draw the
+     * discovery-phase number label above each unit. Empty when not applicable.
+     */
+    virtual TArray<FPartyPawnMarker> GetPawnMarkers() const { return {}; }
+
 protected:
     // ---- Phase handler virtuals (subclasses override what they care about) ----
 
