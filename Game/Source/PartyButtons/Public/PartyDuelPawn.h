@@ -34,7 +34,9 @@ DECLARE_MULTICAST_DELEGATE_OneParam(FOnPartyDuelPawnDied, int32 /*PlayerIndex*/)
  *
  * A bullet that overlaps this pawn while the reflect window is open is
  * redirected off the sphere's surface normal (see NotifyHitByBullet) instead
- * of killing the pawn; otherwise contact is lethal (Die()).
+ * of dealing damage. Otherwise a non-reflected hit increments HitsTaken;
+ * Die() fires once HitsTaken reaches MaxHits (default 3). The body dims as
+ * damage accumulates so remaining HP reads at a glance.
  */
 UCLASS()
 class PARTYBUTTONS_API APartyDuelPawn : public APawn
@@ -95,17 +97,36 @@ protected:
     UPROPERTY(EditDefaultsOnly, Category = "PartyDuel")
     float MaxChargeSeconds = 2.0f;
 
+    // A comfortable human "quick tap" (press + release) runs ~100–180ms end to
+    // end — the original 0.05s window sat below that floor, so almost every
+    // tap fell through into the Cancel band and never entered ReflectWindow.
     UPROPERTY(EditDefaultsOnly, Category = "PartyDuel")
-    float TapWindowSeconds = 0.05f;
+    float TapWindowSeconds = 0.20f;
 
     UPROPERTY(EditDefaultsOnly, Category = "PartyDuel")
-    float ReflectActiveSeconds = 0.1f;
+    float ReflectActiveSeconds = 0.25f;
+
+    /**
+     * Body color applied while the reflect window is open. Bright white by
+     * default so it reads clearly against every per-player tint. Values > 1
+     * push into HDR — visible even if the base material clamps to LDR.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "PartyDuel")
+    FLinearColor ReflectFlashColor = FLinearColor(2.0f, 2.0f, 2.0f, 1.f);
+
+    /**
+     * How many non-reflected bullet hits kill this pawn. 1 = one-shot kill
+     * (original behavior); the default of 3 gives players two forgiveness
+     * hits before elimination. Clamped to >= 1 at runtime.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "PartyDuel", meta = (ClampMin = "1"))
+    int32 MaxHits = 3;
 
     UPROPERTY(EditDefaultsOnly, Category = "PartyDuel")
     float MinBulletSpeed = 400.f;
 
     UPROPERTY(EditDefaultsOnly, Category = "PartyDuel")
-    float MaxBulletSpeed = 1600.f;
+    float MaxBulletSpeed = 1000.f;
 
     UPROPERTY(EditDefaultsOnly, Category = "PartyDuel")
     TSubclassOf<APartyBullet> BulletClass;
@@ -117,6 +138,9 @@ private:
     void FireBullet(float HeldSeconds);
     void Die();
 
+    /** Push the current body color to the MID — base tint or reflect flash. */
+    void ApplyBodyColor(bool bReflectFlash);
+
     UPROPERTY(VisibleAnywhere, Category = "PartyDuel")
     TObjectPtr<USphereComponent> SphereComponent;
 
@@ -126,11 +150,21 @@ private:
     UPROPERTY(VisibleAnywhere, Category = "PartyDuel")
     TObjectPtr<UArrowComponent> FacingArrow;
 
+    /** Dynamic material on MeshComponent — cached so we can re-tint at runtime. */
+    UPROPERTY()
+    TObjectPtr<UMaterialInstanceDynamic> BodyMID;
+
+    /** Per-player tint set in Init, restored when leaving ReflectWindow. */
+    FLinearColor BaseColor = FLinearColor::White;
+
     int32 PlayerIndex = INDEX_NONE;
     EDuelState State  = EDuelState::Idle;
 
     double PressWorldTime       = 0.0;
     double ReflectWindowEndTime = 0.0;
+
+    /** Non-reflected bullet hits taken so far. Die() fires at MaxHits. */
+    int32 HitsTaken = 0;
 
     bool bAlive = true;
 };

@@ -53,14 +53,46 @@ APartyDuelPawn::APartyDuelPawn()
 void APartyDuelPawn::Init(int32 InPlayerIndex, const FLinearColor& InColor)
 {
     PlayerIndex = InPlayerIndex;
+    BaseColor   = InColor;
 
-    if (UMaterialInstanceDynamic* MID = MeshComponent->CreateAndSetMaterialInstanceDynamic(0))
-    {
-        // Best-effort tint: SetVectorParameterValue is a harmless no-op if the
-        // base material doesn't expose "Color" (BasicShapeMaterial does).
-        MID->SetVectorParameterValue(TEXT("Color"), InColor);
-    }
+    // Cache the MID so state transitions can retint the body (base ↔ reflect flash).
+    BodyMID = MeshComponent->CreateAndSetMaterialInstanceDynamic(0);
+    ApplyBodyColor(/*bReflectFlash=*/false);
+
     FacingArrow->SetArrowColor(InColor);
+}
+
+void APartyDuelPawn::ApplyBodyColor(bool bReflectFlash)
+{
+    if (!BodyMID) { return; }
+
+    FLinearColor Target;
+    if (bReflectFlash)
+    {
+        Target = ReflectFlashColor;
+    }
+    else
+    {
+        // Fade the base tint toward black proportional to accumulated damage
+        // so remaining HP reads at a glance without a separate health bar.
+        // Full HP -> full tint. On the killing hit Die() runs before this
+        // helper does, so we never render a fully-black living pawn.
+        const int32 Cap        = FMath::Max(1, MaxHits);
+        const int32 Remaining  = FMath::Clamp(Cap - HitsTaken, 0, Cap);
+        const float Brightness = static_cast<float>(Remaining) / static_cast<float>(Cap);
+        Target = FLinearColor(
+            BaseColor.R * Brightness,
+            BaseColor.G * Brightness,
+            BaseColor.B * Brightness,
+            BaseColor.A);
+    }
+
+    // BasicShapeMaterial exposes "Color"; harmless no-op if a designer swaps
+    // in a base material that names its input differently. We also poke
+    // "EmissiveColor" so a genuinely emissive base material glows during the
+    // window without breaking the fallback tint path.
+    BodyMID->SetVectorParameterValue(TEXT("Color"),         Target);
+    BodyMID->SetVectorParameterValue(TEXT("EmissiveColor"), bReflectFlash ? Target : FLinearColor::Black);
 }
 
 void APartyDuelPawn::BeginPlay()
@@ -89,6 +121,7 @@ void APartyDuelPawn::Tick(float DeltaSeconds)
 void APartyDuelPawn::EnterIdle()
 {
     State = EDuelState::Idle;
+    ApplyBodyColor(/*bReflectFlash=*/false);
 }
 
 void APartyDuelPawn::NotifyPressed()
@@ -111,6 +144,7 @@ void APartyDuelPawn::NotifyReleased()
     case PartyDuel::EReleaseAction::Reflect:
         State                = EDuelState::ReflectWindow;
         ReflectWindowEndTime = Now + ReflectActiveSeconds;
+        ApplyBodyColor(/*bReflectFlash=*/true);
         break;
 
     case PartyDuel::EReleaseAction::Shoot:
@@ -169,7 +203,21 @@ bool APartyDuelPawn::NotifyHitByBullet(APartyBullet* Bullet, const FHitResult& H
         return true;
     }
 
-    Die();
+    ++HitsTaken;
+    UE_LOG(LogPartyButtons, Log,
+        TEXT("APartyDuelPawn: player %d took hit %d/%d."),
+        PlayerIndex + 1, HitsTaken, FMath::Max(1, MaxHits));
+
+    if (HitsTaken >= FMath::Max(1, MaxHits))
+    {
+        Die();
+    }
+    else
+    {
+        // Refresh the base tint so the damage fade is visible immediately.
+        // (EnterIdle would do the same, but we may currently be Charging.)
+        ApplyBodyColor(/*bReflectFlash=*/false);
+    }
     return false;
 }
 
