@@ -19,7 +19,12 @@
 
 // GPIO pins for buttons 1..16.
 // Pin 13 is skipped (onboard LED). Adjust for your actual wiring.
-const uint8_t BUTTON_PINS[16] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16 };
+
+// TEMP: COMMENTING OUT WHILE TESTING SINGLE BUTTON SETUP
+// const uint8_t BUTTON_PINS[16] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16 };
+
+// TEMP: Button 1 at Position 1.  Ground at 0.
+const uint8_t BUTTON_PINS[16] = { 1 };
 
 // Debounce window in milliseconds.
 const uint16_t DEBOUNCE_MS = 5;
@@ -34,42 +39,38 @@ Bounce buttons[16];
 
 // ---- Arduino lifecycle -----------------------------------------------------
 
-void setup()
-{
-    for (uint8_t i = 0; i < 16; i++)
-    {
-        buttons[i].attach(BUTTON_PINS[i], INPUT_PULLUP);
-        buttons[i].interval(DEBOUNCE_MS);
-    }
+void setup() {
+  for (uint8_t i = 0; i < 16; i++) {
+    buttons[i].attach(BUTTON_PINS[i], INPUT_PULLUP);
+    buttons[i].interval(DEBOUNCE_MS);
+  }
 
 #if SERIAL_DEBUG
-    Serial.begin(115200);
-    while (!Serial) {}  // wait for USB serial (remove if non-blocking startup needed)
-    Serial.println("PartyButtons: serial debug active.");
+  Serial.begin(115200);
+  while (!Serial) {}  // wait for USB serial (remove if non-blocking startup needed)
+  Serial.println("PartyButtons: serial debug active.");
 #endif
 }
 
-void loop()
-{
-    for (uint8_t i = 0; i < 16; i++)
+void loop() {
+  for (uint8_t i = 0; i < 16; i++) {
+    buttons[i].update();
+
+    if (buttons[i].fell())  // HIGH→LOW = pressed (INPUT_PULLUP: pressed = LOW)
     {
-        buttons[i].update();
-
-        if (buttons[i].fell())   // HIGH→LOW = pressed (INPUT_PULLUP: pressed = LOW)
-        {
-            Joystick.button(i + 1, 1);
+      Joystick.button(i + 1, 1);
 #if SERIAL_DEBUG
-            Serial.printf("Button %u down\n", i + 1);
+      Serial.printf("Button %u down\n", i + 1);
 #endif
-        }
-
-        if (buttons[i].rose())   // LOW→HIGH = released
-        {
-            Joystick.button(i + 1, 0);
-#if SERIAL_DEBUG
-            Serial.printf("Button %u up\n", i + 1);
-#endif
-        }
     }
-    // No delay() — Teensy native HID auto-sends at USB frame rate (~1 ms).
+
+    if (buttons[i].rose())  // LOW→HIGH = released
+    {
+      Joystick.button(i + 1, 0);
+#if SERIAL_DEBUG
+      Serial.printf("Button %u up\n", i + 1);
+#endif
+    }
+  }
+  // No delay() — Teensy native HID auto-sends at USB frame rate (~1 ms).
 }

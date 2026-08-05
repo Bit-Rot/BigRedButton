@@ -29,8 +29,10 @@ button and confirm exactly one corresponding indicator lights without ghosting.
 
 **Instruction:** Device Manager → HID devices → right-click the Teensy joystick → Properties →
 Details → Hardware IDs → note `VID_xxxx&PID_yyyy`. Open
-`Game/Config/DefaultInput.ini` and replace `ProductID="0x0486"` with the real PID.
-Teensy VID is almost always `0x16C0`; confirm it too.
+`Game/Config/DefaultInput.ini` and confirm `VendorID`/`ProductID` match.
+Teensy VID is almost always `0x16C0`. Observed PID for the "Joystick" USB Type on
+this project's Teensy 4.1 is `0x0482` (already set). Different USB Types may yield a
+different PID.
 
 ---
 
