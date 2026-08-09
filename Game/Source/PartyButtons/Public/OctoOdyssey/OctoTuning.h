@@ -148,19 +148,38 @@ struct PARTYBUTTONS_API FOctoTuning
 
     /**
      * Damping RATIO, not a coefficient: 1 is critical (no overshoot at all), below 1 rings.
-     * The default sits well under 1 on purpose — the overshoot IS the flail when the
+     * The default sits below 1 on purpose — the overshoot IS the flail when the
      * octopus slams to a halt, and a critically damped head just looks stiff.
      */
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
-    float BodySpringDamping = 0.35f;
+    float BodySpringDamping = 0.76f;
 
     /** Scales the deflection the spring produces before it is posed. The "how floppy" dial. */
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
-    float BodyLagScale = 1.f;
+    float BodyLagScale = 2.45f;
+
+    /**
+     * How far the head TRAILS a travelling octopus, in cm per 100 cm/s of speed — as if it
+     * were dragging through air.
+     *
+     * This is a different feel from the spring lag above, and the two are worth thinking
+     * about separately. The spring responds to ACCELERATION: it flings the head about when
+     * the octopus changes direction and then lets it centre again during a steady glide.
+     * This responds to SPEED: it holds the head consistently swept back for as long as the
+     * octopus is moving, and points it where the octopus has been. Turn it up (and the
+     * frequency up with it) for a head that reads as light and air-dragged rather than heavy
+     * and pendulum-like.
+     *
+     * The resulting trail is independent of BodySpringFrequencyHz and BodySpringDamping by
+     * construction — see OctoBody::DragAccel — so stiffening the spring to kill the wobble
+     * does not also flatten the drag.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
+    float BodyAirDrag = 2.f;
 
     /** Ceiling on head deflection, in cm, before the bend is computed. 0 disables the clamp. */
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
-    float BodyMaxDeflection = 45.f;
+    float BodyMaxDeflection = 60.f;
 
     /** Fraction of WorldGravityZ applied to the head particle, so it droops instead of hanging level. */
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
@@ -173,7 +192,23 @@ struct PARTYBUTTONS_API FOctoTuning
      * the skin tearing at the arm roots.
      */
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
-    float BodyBendTaper = 0.7f;
+    float BodyBendTaper = 0.55f;
+
+    /**
+     * Let the head bone ride its parent rigidly instead of bending on its own.
+     *
+     * On (the default) the bend lands on Body/Face/Head1 and the head travels as one solid
+     * piece on a bending neck. Off, every share shifts one bone down the chain and Head2 is
+     * left holding the remainder — at the default taper that is 67% of the whole bend, about
+     * 37 degrees, applied at the very tip inside the head mesh, where it reads as the head
+     * shearing rather than the neck bending. Kept as a switch purely so the difference can be
+     * seen back to back; there is no reason to ship it off.
+     *
+     * Squash and stretch is unaffected either way — that rides the head bone's SCALE, which
+     * neither setting touches.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
+    bool bHeadTipRigid = true;
 
     /** Hard limit on the total bend. The real cap on how far the head can throw. */
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
@@ -200,7 +235,7 @@ struct PARTYBUTTONS_API FOctoTuning
 
     /** How much of the head's inward speed survives an impact, reversed. 0 is a dead stop. */
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
-    float HeadCollisionRestitution = 0.3f;
+    float HeadCollisionRestitution = 0.8f;
 
     /** Fraction of the head's ACROSS-surface speed killed on impact. 1 makes the head stick and drag. */
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")

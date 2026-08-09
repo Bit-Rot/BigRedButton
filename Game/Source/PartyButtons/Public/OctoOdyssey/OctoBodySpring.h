@@ -74,9 +74,9 @@ namespace OctoBody
      * stepping the anchor forward instead lets the head drift past the body it should trail.
      *
      * Steady behaviour worth knowing when tuning: a constant-velocity glide produces no
-     * deflection at all, and a constant acceleration a settles at a lag of a/omega^2 —
-     * so lag scales with acceleration, and softening BodySpringFrequencyHz by half
-     * quadruples it.
+     * deflection at all (unless DragAccel is fed in through ExtraAccel — that is exactly
+     * what it is for), and a constant acceleration a settles at a lag of a/omega^2 — so lag
+     * scales with acceleration, and softening BodySpringFrequencyHz by half quadruples it.
      *
      * Substeps internally at MaxSubstep and clamps the frame to MaxFrameTime, so neither a
      * stiff tuning nor a frame hitch can blow the integrator up. Uninitialised state snaps to
@@ -113,6 +113,27 @@ namespace OctoBody
     PARTYBUTTONS_API void BendWeights(int32 NumJoints, float Taper, TArray<float>& OutWeights);
 
     /**
+     * Acceleration that makes the head TRAIL a travelling body, as if it were dragging
+     * through air — as opposed to the pendulum lag StepSpring already produces, which
+     * responds to ACCELERATION and vanishes the moment the octopus settles into a steady
+     * glide. Feed the result to StepSpring's ExtraAccel.
+     *
+     * TrailPer100Speed is in cm of steady trail per 100 cm/s of travel, and it means exactly
+     * that: the settled offset is TrailPer100Speed * Speed / 100, opposite the direction of
+     * travel, and INDEPENDENT of FrequencyHz and DampingRatio. Retuning the spring's
+     * stiffness therefore does not move the trail, which is what lets "how far the head
+     * drags behind" and "how bouncy the head is" be tuned against each other rather than
+     * fought over. See the implementation for why the Omega^2 factor is what buys that.
+     *
+     * Deliberately driven by the ANCHOR's velocity rather than the head's own. Real drag
+     * would act on the head's absolute velocity, but the part of that which comes from the
+     * head's motion RELATIVE to the body is just damping, and DampingRatio already owns
+     * that dial. Splitting them keeps one knob for "trails while travelling" and another for
+     * "stops wobbling", instead of two knobs that each do half of both.
+     */
+    PARTYBUTTONS_API FVector DragAccel(const FVector& AnchorVelocity, float TrailPer100Speed, float FrequencyHz);
+
+    /**
      * Bone-space transforms for the whole head chain, swinging its tip toward TargetTipCS
      * (component space). One entry per FOctoBodyBones::ChainIndices entry, in the same order.
      *
@@ -123,10 +144,20 @@ namespace OctoBody
      * and BodyMaxDeflection shapes the response below it. (Adding a length scale so the tip
      * actually reaches would be a separate, deliberate change.)
      *
-     * Rotations are distributed by BendWeights and composed down the chain, so the tip
-     * receives the full rotation and the base receives none. The whole thing is computed in
-     * component space and converted back via GetRelativeTransform, which is exact against the
+     * Rotations are distributed by BendWeights and composed down the chain, so the tip's
+     * ORIGIN always receives the full rotation. The whole thing is computed in component
+     * space and converted back via GetRelativeTransform, which is exact against the
      * composition rule in OctoSkeleton::ComposeRefPoseComponentSpace.
+     *
+     * bRigidTip decides whether the tip bone does any bending OF ITS OWN. With it set, the
+     * weights fall on Body/Face/Head1 and the tip inherits Head1's orientation unchanged —
+     * the head travels as one rigid piece on a bending neck, which is what a head should do.
+     * Clear it and every weight shifts one bone down the chain: Body stops rotating entirely
+     * and the tip is left holding the remainder, which at the default taper is 73% of the
+     * whole bend concentrated at the very tip, inside the head mesh. That reads as the head
+     * shearing rather than the neck bending, so it is off by default and kept only as an A/B.
+     *
+     * Either way the tip's SCALE is untouched here — the impact squash owns that.
      *
      * Reference scale is preserved on every bone — the impact squash multiplies into the
      * tip's scale afterwards, and would be lost if this overwrote it.
@@ -139,6 +170,7 @@ namespace OctoBody
         const FVector& TargetTipCS,
         float MaxBendDegrees,
         float Taper,
+        bool bRigidTip,
         TArray<FTransform>& OutBoneSpace,
         FTransform* OutTipCS = nullptr);
 

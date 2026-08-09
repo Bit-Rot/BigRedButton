@@ -158,9 +158,10 @@ bool FOctoSkeletonReachMatchesTuning::RunTest(const FString& Parameters)
 
     // The whole premise of the pose driver: SK_Okto's reference pose IS the octopus
     // at full extension, so the modelled tip lands exactly on the collider's outer cap.
-    // Note this is the EFFECTIVE max (MaxSafeExtension binds at 70, below the nominal
-    // ArmMaxExtension of 75) — the mesh was modelled against what the arm can reach,
-    // not against what the tunable says.
+    // Note this is the EFFECTIVE max — the mesh was modelled against what the arm can
+    // reach, not against what the tunable says. At the shipping defaults the two coincide
+    // at 70; the Min still matters because raising ArmMaxExtension alone cannot move the
+    // reach past MaxSafeExtension, which is what TickArm clamps to.
     const float ExpectedTip = OctoArm::HandCenterOffset(
         Defaults.SphereRadius, Defaults.ArmRadius, Defaults.ArmHalfHeight, SafeMax);
 

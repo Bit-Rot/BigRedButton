@@ -151,6 +151,7 @@ void BuildChainBend(
     const FVector& TargetTipCS,
     float MaxBendDegrees,
     float Taper,
+    bool bRigidTip,
     TArray<FTransform>& OutBoneSpace,
     FTransform* OutTipCS)
 {
@@ -187,7 +188,7 @@ void BuildChainBend(
         }
     }
 
-    // One weight per JOINT — the tip is a leaf and carries no rotation of its own.
+    // One weight per rotating JOINT. Which bones those are depends on bRigidTip — see below.
     TArray<float> Weights;
     BendWeights(NumBones - 1, Taper, Weights);
 
@@ -198,7 +199,23 @@ void BuildChainBend(
 
     for (int32 i = 0; i < NumBones; i++)
     {
-        // Cumulative, so the base is unrotated and the tip receives the whole bend.
+        // WHERE the weight is added decides which bones bend, and it matters a great deal.
+        //
+        // Adding BEFORE (bRigidTip) makes bone i carry its own share, so the weights fall on
+        // Body, Face and Head1 and the running total reaches 1 AT Head1. The tip then adds
+        // nothing of its own: it inherits Head1's orientation exactly and rides along rigid.
+        //
+        // Adding AFTER shifts every weight one bone down the chain: Body never rotates at
+        // all, and the tip is left holding the entire remainder. At the default taper that
+        // put 67% of the bend on Head2 — 37 degrees of local rotation at the very tip, inside
+        // the head mesh, which reads as the head shearing rather than the neck bending.
+        if (bRigidTip && Weights.IsValidIndex(i))
+        {
+            Cumulative += Weights[i];
+        }
+
+        // Cumulative, so the base is unrotated and the tip's ORIGIN receives the whole bend
+        // either way — only the split between the joints changes.
         const FQuat Rotation = FQuat::Slerp(FQuat::Identity, Bend, FMath::Clamp(Cumulative, 0.f, 1.f));
 
         FTransform PosedCS;
@@ -216,11 +233,27 @@ void BuildChainBend(
         }
 
         ParentCS = PosedCS;
-        if (Weights.IsValidIndex(i))
+        if (!bRigidTip && Weights.IsValidIndex(i))
         {
             Cumulative += Weights[i];
         }
     }
+}
+
+FVector DragAccel(const FVector& AnchorVelocity, float TrailPer100Speed, float FrequencyHz)
+{
+    if (TrailPer100Speed <= 0.f || FrequencyHz <= UE_KINDA_SMALL_NUMBER)
+    {
+        return FVector::ZeroVector;
+    }
+
+    // Scaling by Omega^2 is the whole trick. The spring settles where Omega^2 * offset
+    // balances the applied acceleration, so an acceleration of -(k * Omega^2) * V settles at
+    // an offset of exactly -k * V — the Omega cancels. The trail is therefore whatever this
+    // knob says in cm, and STAYS there when the stiffness is retuned, which is what makes
+    // "drag" and "springiness" independent dials instead of two names for one feel.
+    const float Omega = 2.f * UE_PI * FrequencyHz;
+    return AnchorVelocity * -((TrailPer100Speed / 100.f) * Omega * Omega);
 }
 
 FVector SquashScale(const FVector& NormalInBoneSpace, float Amount)

@@ -62,21 +62,28 @@ TArrayView<const FOctoTuningParam> OctoTuning::GetParams()
         BoolParam (TEXT("bSweepPhysicsBodies"),    TEXT("Arms"),     &FOctoTuning::bSweepPhysicsBodies),
 
         // ---- Body ----------------------------------------------------------
+        // Ranges are deliberately wider than "sensible" at both ends — this whole block is a
+        // look-at-it feature, and a slider that stops before the effect is unmistakable is a
+        // slider that cannot answer "is this thing even on?".
         BoolParam (TEXT("bBodySpring"),            TEXT("Body"),     &FOctoTuning::bBodySpring),
-        FloatParam(TEXT("BodySpringFrequencyHz"),  TEXT("Body"),     &FOctoTuning::BodySpringFrequencyHz,   0.5f,   8.f,  0.25f),
-        FloatParam(TEXT("BodySpringDamping"),      TEXT("Body"),     &FOctoTuning::BodySpringDamping,       0.05f,  2.f,  0.05f),
-        FloatParam(TEXT("BodyLagScale"),           TEXT("Body"),     &FOctoTuning::BodyLagScale,            0.f,    2.f,  0.05f),
-        FloatParam(TEXT("BodyMaxDeflection"),      TEXT("Body"),     &FOctoTuning::BodyMaxDeflection,       0.f,  120.f,  5.f),
-        FloatParam(TEXT("BodyGravityScale"),       TEXT("Body"),     &FOctoTuning::BodyGravityScale,        0.f,    2.f,  0.05f),
+        FloatParam(TEXT("BodySpringFrequencyHz"),  TEXT("Body"),     &FOctoTuning::BodySpringFrequencyHz,   0.25f, 12.f,  0.25f),
+        FloatParam(TEXT("BodySpringDamping"),      TEXT("Body"),     &FOctoTuning::BodySpringDamping,       0.01f,  2.f,  0.05f),
+        FloatParam(TEXT("BodyLagScale"),           TEXT("Body"),     &FOctoTuning::BodyLagScale,            0.f,    4.f,  0.05f),
+        FloatParam(TEXT("BodyAirDrag"),            TEXT("Body"),     &FOctoTuning::BodyAirDrag,             0.f,   60.f,  1.f),
+        FloatParam(TEXT("BodyMaxDeflection"),      TEXT("Body"),     &FOctoTuning::BodyMaxDeflection,       0.f,  400.f, 10.f),
+        FloatParam(TEXT("BodyGravityScale"),       TEXT("Body"),     &FOctoTuning::BodyGravityScale,        0.f,    4.f,  0.05f),
         FloatParam(TEXT("BodyBendTaper"),          TEXT("Body"),     &FOctoTuning::BodyBendTaper,           0.f,    1.f,  0.05f),
-        FloatParam(TEXT("BodyMaxBendDegrees"),     TEXT("Body"),     &FOctoTuning::BodyMaxBendDegrees,      0.f,   90.f,  5.f),
+        BoolParam (TEXT("bHeadTipRigid"),          TEXT("Body"),     &FOctoTuning::bHeadTipRigid),
+        FloatParam(TEXT("BodyMaxBendDegrees"),     TEXT("Body"),     &FOctoTuning::BodyMaxBendDegrees,      0.f,  120.f,  5.f),
         BoolParam (TEXT("bHeadCollision"),         TEXT("Body"),     &FOctoTuning::bHeadCollision),
         FloatParam(TEXT("HeadCollisionOffsetX"),   TEXT("Body"),     &FOctoTuning::HeadCollisionOffsetX,  -200.f,  200.f, 5.f),
         FloatParam(TEXT("HeadCollisionRestitution"), TEXT("Body"),   &FOctoTuning::HeadCollisionRestitution, 0.f,   1.f,  0.05f),
         FloatParam(TEXT("HeadCollisionFriction"),  TEXT("Body"),     &FOctoTuning::HeadCollisionFriction,   0.f,    1.f,  0.05f),
         BoolParam (TEXT("bHeadSquash"),            TEXT("Body"),     &FOctoTuning::bHeadSquash),
-        FloatParam(TEXT("HeadSquashMax"),          TEXT("Body"),     &FOctoTuning::HeadSquashMax,           0.f,    0.8f, 0.05f),
-        FloatParam(TEXT("HeadSquashFullSpeed"),    TEXT("Body"),     &FOctoTuning::HeadSquashFullSpeed,   200.f, 3000.f, 50.f),
+        FloatParam(TEXT("HeadSquashMax"),          TEXT("Body"),     &FOctoTuning::HeadSquashMax,           0.f,    0.95f, 0.05f),
+        // Bottoms out at 50 so a gentle touch can be made to produce FULL squash — the only
+        // reliable way to answer "is squash even firing?" without having to land hard first.
+        FloatParam(TEXT("HeadSquashFullSpeed"),    TEXT("Body"),     &FOctoTuning::HeadSquashFullSpeed,    50.f, 3000.f, 25.f),
         FloatParam(TEXT("HeadSquashFrequencyHz"),  TEXT("Body"),     &FOctoTuning::HeadSquashFrequencyHz,   1.f,   15.f,  0.5f),
         FloatParam(TEXT("HeadSquashDamping"),      TEXT("Body"),     &FOctoTuning::HeadSquashDamping,       0.05f,  2.f,  0.05f),
 

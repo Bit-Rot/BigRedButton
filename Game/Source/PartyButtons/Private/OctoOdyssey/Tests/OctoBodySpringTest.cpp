@@ -228,6 +228,85 @@ bool FOctoBodySpringDoesNotDriftOnAGlide::RunTest(const FString& Parameters)
 // --------------------------------------------------------------------------
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FOctoBodyDragTrailsBySpeedAlone,
+    "PartyButtons.Octo.BodySpring.DragTrailsBySpeedAlone",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FOctoBodyDragTrailsBySpeedAlone::RunTest(const FString& Parameters)
+{
+    // Drag is the counterpart to the spring's lag: the spring answers to ACCELERATION and
+    // lets go during a steady glide, this answers to SPEED and holds the head swept back for
+    // as long as the octopus is travelling.
+    constexpr float Speed  = 800.f;
+    constexpr float Dt     = 1.f / 60.f;
+    constexpr float Trail  = 5.f;   // cm of trail per 100 cm/s
+
+    TestTrue(TEXT("Zero drag is no acceleration at all"),
+        OctoBody::DragAccel(FVector(0.0, Speed, 0.0), 0.f, 2.5f).IsNearlyZero());
+    TestTrue(TEXT("A stationary body drags nothing"),
+        OctoBody::DragAccel(FVector::ZeroVector, Trail, 2.5f).IsNearlyZero());
+
+    // The property worth protecting: the settled trail depends on SPEED and the knob, and on
+    // nothing else. Stiffening the spring to calm the wobble must not also flatten the drag,
+    // or the two knobs become two names for one feel.
+    const TArray<float> Frequencies = { 1.f, 2.5f, 6.f, 12.f };
+
+    for (const float Frequency : Frequencies)
+    {
+        OctoBody::FHeadSpringState State;
+        State.Reset(FVector::ZeroVector);
+
+        FVector       Anchor = FVector::ZeroVector;
+        const FVector AnchorVelocity(0.0, Speed, 0.0);
+
+        for (int32 i = 0; i < 900; i++) // 15s — long enough to settle even at 1Hz
+        {
+            Anchor += AnchorVelocity * Dt;
+            OctoBody::StepSpring(
+                State, Anchor, AnchorVelocity, Frequency, 0.35f,
+                OctoBody::DragAccel(AnchorVelocity, Trail, Frequency), Dt);
+        }
+
+        const FVector Deflection = State.Position - Anchor;
+        const float   Expected   = -(Trail / 100.f) * Speed; // -40cm
+
+        TestTrue(
+            FString::Printf(TEXT("%.2fHz: the head trails opposite travel by %.2f, expected %.2f"),
+                Frequency, Deflection.Y, Expected),
+            FMath::IsNearlyEqual(static_cast<float>(Deflection.Y), Expected, 0.5f));
+
+        TestTrue(
+            FString::Printf(TEXT("%.2fHz: the trail is purely along the direction of travel"), Frequency),
+            FMath::Abs(Deflection.Z) < 0.01);
+    }
+
+    // Twice the speed, twice the trail.
+    {
+        OctoBody::FHeadSpringState State;
+        State.Reset(FVector::ZeroVector);
+
+        FVector       Anchor = FVector::ZeroVector;
+        const FVector AnchorVelocity(0.0, 2.f * Speed, 0.0);
+
+        for (int32 i = 0; i < 900; i++)
+        {
+            Anchor += AnchorVelocity * Dt;
+            OctoBody::StepSpring(
+                State, Anchor, AnchorVelocity, 2.5f, 0.35f,
+                OctoBody::DragAccel(AnchorVelocity, Trail, 2.5f), Dt);
+        }
+
+        TestTrue(
+            FString::Printf(TEXT("Double the speed doubles the trail (%.2f)"), (State.Position - Anchor).Y),
+            FMath::IsNearlyEqual(static_cast<float>((State.Position - Anchor).Y), -2.f * (Trail / 100.f) * Speed, 0.5f));
+    }
+
+    return true;
+}
+
+// --------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FOctoBodySpringOvershootsOnAbruptStop,
     "PartyButtons.Octo.BodySpring.SpringOvershootsOnAbruptStop",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
@@ -389,57 +468,122 @@ bool FOctoBodyChainBendRoundTrips::RunTest(const FString& Parameters)
     TestTrue(FString::Printf(TEXT("...and 85.06cm long (%.3f)"), Bones.ChainLength),
         FMath::IsNearlyEqual(Bones.ChainLength, 85.059f, 0.01f));
 
-    // ---- Zero deflection must be a perfect no-op --------------------------
-    {
-        TArray<FTransform> Pose;
-        OctoBody::BuildChainBend(Bones, Bones.TipRestCS, 55.f, 0.7f, Pose);
+    // Both tip modes have to land the tip in exactly the same place — they differ only in
+    // how the bend is SHARED OUT, never in where the head ends up.
+    const TArray<bool> TipModes = { true, false };
 
-        TestEqual(TEXT("One transform per chain bone"), Pose.Num(), Bones.ChainIndices.Num());
-        for (int32 i = 0; i < Pose.Num(); i++)
+    for (const bool bRigidTip : TipModes)
+    {
+        const TCHAR* const Mode = bRigidTip ? TEXT("rigid tip") : TEXT("bending tip");
+
+        // ---- Zero deflection must be a perfect no-op ----------------------
         {
+            TArray<FTransform> Pose;
+            OctoBody::BuildChainBend(Bones, Bones.TipRestCS, 55.f, 0.7f, bRigidTip, Pose);
+
+            TestEqual(TEXT("One transform per chain bone"), Pose.Num(), Bones.ChainIndices.Num());
+            for (int32 i = 0; i < Pose.Num(); i++)
+            {
+                TestTrue(
+                    FString::Printf(TEXT("%s: bone %d reproduces the reference pose exactly"), Mode, i),
+                    Pose[i].Equals(Bones.RefLocal[i], 0.001));
+            }
+        }
+
+        // ---- A real deflection lands the tip on the arc -------------------
+        const TArray<FVector> Deflections = {
+            FVector(0.0,  40.0,   0.0),
+            FVector(0.0, -15.0,  25.0),
+            FVector(0.0,   0.0, -30.0),
+        };
+
+        for (const FVector& Deflection : Deflections)
+        {
+            const FVector Target = Bones.TipRestCS + Deflection;
+
+            TArray<FTransform> Pose;
+            FTransform         TipCS = FTransform::Identity;
+            OctoBody::BuildChainBend(Bones, Target, 180.f, 0.7f, bRigidTip, Pose, &TipCS);
+
+            const FTransform Composed = ComposeTip(Bones, Pose);
+            const FVector    Base     = Bones.RefCS[0].GetLocation();
+            const FVector    WantDir  = (Target - Base).GetSafeNormal();
+            const FVector    Expected = Base + WantDir * Bones.ChainLength;
+
+            // The composition check: BuildChainBend's bone-space output, re-composed the way
+            // the engine composes it, has to agree with the transform it reported.
             TestTrue(
-                FString::Printf(TEXT("Bone %d reproduces the reference pose exactly"), i),
-                Pose[i].Equals(Bones.RefLocal[i], 0.001));
+                FString::Printf(TEXT("%s, deflection %s: the re-composed tip matches the reported one"),
+                    Mode, *Deflection.ToString()),
+                Composed.GetLocation().Equals(TipCS.GetLocation(), 0.01));
+
+            // The chain is inextensible, so the tip lands on the arc — pointing at the
+            // target, at the rest length, NOT at the target itself.
+            TestTrue(
+                FString::Printf(TEXT("%s, deflection %s: the tip lands on the arc (%s vs %s)"),
+                    Mode, *Deflection.ToString(), *Composed.GetLocation().ToString(), *Expected.ToString()),
+                Composed.GetLocation().Equals(Expected, 0.01));
+
+            TestTrue(
+                FString::Printf(TEXT("%s, deflection %s: the chain keeps its length"), Mode, *Deflection.ToString()),
+                FMath::IsNearlyEqual((Composed.GetLocation() - Base).Size(), Bones.ChainLength, 0.01));
         }
     }
 
-    // ---- A real deflection lands the tip on the arc -----------------------
-    const TArray<FVector> Deflections = {
-        FVector(0.0,  40.0,   0.0),
-        FVector(0.0, -15.0,  25.0),
-        FVector(0.0,   0.0, -30.0),
-    };
+    return true;
+}
 
-    for (const FVector& Deflection : Deflections)
-    {
-        const FVector Target = Bones.TipRestCS + Deflection;
+// --------------------------------------------------------------------------
 
-        TArray<FTransform> Pose;
-        FTransform         TipCS = FTransform::Identity;
-        OctoBody::BuildChainBend(Bones, Target, 180.f, 0.7f, Pose, &TipCS);
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FOctoBodyRigidTipDoesNotBend,
+    "PartyButtons.Octo.BodySpring.RigidTipDoesNotBend",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-        const FTransform Composed = ComposeTip(Bones, Pose);
-        const FVector    Base     = Bones.RefCS[0].GetLocation();
-        const FVector    WantDir  = (Target - Base).GetSafeNormal();
-        const FVector    Expected = Base + WantDir * Bones.ChainLength;
+bool FOctoBodyRigidTipDoesNotBend::RunTest(const FString& Parameters)
+{
+    // The head is a solid lump on a bending neck. Any rotation of the TIP bone relative to
+    // its parent shears the head mesh around its own origin, and because the taper crowds the
+    // bend toward the head that share was once 73% of the whole thing — the largest rotation
+    // in the chain, applied exactly where it looks worst.
+    const FOctoBodyBones Bones  = MakeOktoChain();
+    const FVector        Target = Bones.TipRestCS + FVector(0.0, 60.0, 0.0);
 
-        // The composition check: BuildChainBend's bone-space output, re-composed the way the
-        // engine composes it, has to agree with the component-space transform it reported.
-        TestTrue(
-            FString::Printf(TEXT("Deflection %s: the re-composed tip matches the reported one"), *Deflection.ToString()),
-            Composed.GetLocation().Equals(TipCS.GetLocation(), 0.01));
+    TArray<FTransform> Rigid;
+    OctoBody::BuildChainBend(Bones, Target, 55.f, 0.7f, /*bRigidTip=*/true, Rigid);
 
-        // The chain is inextensible, so the tip lands on the arc — pointing at the target,
-        // at the rest length, NOT at the target itself.
-        TestTrue(
-            FString::Printf(TEXT("Deflection %s: the tip lands on the arc (%s vs %s)"),
-                *Deflection.ToString(), *Composed.GetLocation().ToString(), *Expected.ToString()),
-            Composed.GetLocation().Equals(Expected, 0.01));
+    const int32 TipIndex = Rigid.Num() - 1;
 
-        TestTrue(
-            FString::Printf(TEXT("Deflection %s: the chain keeps its length"), *Deflection.ToString()),
-            FMath::IsNearlyEqual((Composed.GetLocation() - Base).Size(), Bones.ChainLength, 0.01));
-    }
+    // Bone-space rotation IS the rotation relative to the parent, so "unchanged from the
+    // reference" is exactly "adds no bend of its own".
+    TestTrue(
+        FString::Printf(TEXT("A rigid tip keeps its reference bone-space transform (%s vs %s)"),
+            *Rigid[TipIndex].GetRotation().Rotator().ToString(),
+            *Bones.RefLocal[TipIndex].GetRotation().Rotator().ToString()),
+        Rigid[TipIndex].Equals(Bones.RefLocal[TipIndex], 0.001));
+
+    // The base must now be the bone that picks that share up, rather than sitting inert.
+    TestFalse(
+        TEXT("...and the chain's base is no longer inert"),
+        Rigid[0].Equals(Bones.RefLocal[0], 0.001));
+
+    // The old behaviour, kept only for A/B — the tip carries the largest single rotation.
+    TArray<FTransform> Bending;
+    OctoBody::BuildChainBend(Bones, Target, 55.f, 0.7f, /*bRigidTip=*/false, Bending);
+
+    TestFalse(
+        TEXT("A bending tip does rotate relative to its parent"),
+        Bending[TipIndex].Equals(Bones.RefLocal[TipIndex], 0.001));
+    TestTrue(
+        TEXT("...and in that mode the base is the inert one"),
+        Bending[0].Equals(Bones.RefLocal[0], 0.001));
+
+    // The tip's own share is the biggest in the chain — the measurement behind the artifact.
+    TArray<float> Weights;
+    OctoBody::BendWeights(3, 0.7f, Weights);
+    TestTrue(
+        FString::Printf(TEXT("The shifted share is the chain's largest (%.3f)"), Weights.Last()),
+        Weights.Last() > 0.5f);
 
     return true;
 }
@@ -464,7 +608,7 @@ bool FOctoBodyBendRespectsMaxAngle::RunTest(const FString& Parameters)
         const FVector Target = Bones.TipRestCS + FVector(0.0, 200.0, 0.0);
 
         TArray<FTransform> Pose;
-        OctoBody::BuildChainBend(Bones, Target, MaxDegrees, 0.7f, Pose);
+        OctoBody::BuildChainBend(Bones, Target, MaxDegrees, 0.7f, /*bRigidTip=*/true, Pose);
 
         const FVector Posed  = ComposeTip(Bones, Pose).GetLocation() - Base;
         const float   Actual = AngleBetweenDegrees(Bones.RestDir, Posed);
@@ -497,7 +641,7 @@ bool FOctoBodyChainBendHandlesInvalidRig::RunTest(const FString& Parameters)
 
     TArray<FTransform> Pose;
     FTransform         TipCS = FTransform::Identity;
-    OctoBody::BuildChainBend(Empty, FVector(1.0, 2.0, 3.0), 55.f, 0.7f, Pose, &TipCS);
+    OctoBody::BuildChainBend(Empty, FVector(1.0, 2.0, 3.0), 55.f, 0.7f, /*bRigidTip=*/true, Pose, &TipCS);
 
     TestEqual(TEXT("An invalid rig writes no bones"), Pose.Num(), 0);
     TestTrue(TEXT("...and reports an identity tip"), TipCS.Equals(FTransform::Identity, 0.001));

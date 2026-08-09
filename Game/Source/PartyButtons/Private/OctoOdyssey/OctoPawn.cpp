@@ -394,7 +394,13 @@ void AOctoPawn::TickBodySpring(float DeltaSeconds)
 
     const FVector SweepStart = HeadSpring.Position;
 
-    const FVector ExtraAccel(0.f, 0.f, Tuning.WorldGravityZ * Tuning.BodyGravityScale);
+    // Droop plus air drag. The drag term is what makes the head trail CONSISTENTLY while the
+    // octopus travels, rather than only reacting when it changes direction — see
+    // OctoBody::DragAccel and FOctoTuning::BodyAirDrag.
+    const FVector ExtraAccel =
+        FVector(0.f, 0.f, Tuning.WorldGravityZ * Tuning.BodyGravityScale) +
+        OctoBody::DragAccel(TargetVelocity, Tuning.BodyAirDrag, Tuning.BodySpringFrequencyHz);
+
     OctoBody::StepSpring(
         HeadSpring, TargetWorld, TargetVelocity,
         Tuning.BodySpringFrequencyHz, Tuning.BodySpringDamping, ExtraAccel, DeltaSeconds);
@@ -422,7 +428,7 @@ void AOctoPawn::TickBodySpring(float DeltaSeconds)
     FTransform         TipCS = FTransform::Identity;
     OctoBody::BuildChainBend(
         BodyBones, BodyBones.TipRestCS + Deflection,
-        Tuning.BodyMaxBendDegrees, Tuning.BodyBendTaper, ChainPose, &TipCS);
+        Tuning.BodyMaxBendDegrees, Tuning.BodyBendTaper, Tuning.bHeadTipRigid, ChainPose, &TipCS);
 
     TArray<FTransform>& Pose = OctoMesh->BoneSpaceTransforms;
     for (int32 i = 0; i < BodyBones.ChainIndices.Num(); i++)
