@@ -153,19 +153,39 @@ flow (see `AOctoGameMode::ReloadCourse`'s comment).
 
 All OctoOdyssey code lives under its own subfolder (not flat in the module
 root like Reflex Rumble) — `Public/OctoOdyssey/` + `Private/OctoOdyssey/`,
-classes prefixed `AOcto*`/`FOcto*`/namespace `OctoArm`:
+classes prefixed `AOcto*`/`FOcto*`/namespaces `OctoArm`, `OctoBody`,
+`OctoSkeleton`, `OctoTuning`:
 
 | File | Role |
 |---|---|
 | `Public/OctoOdyssey/OctoArmMath.h` + `Private/` | Pure, world-free arm geometry math (`namespace OctoArm`) — direction, extension, launch impulse, all unit-tested |
-| `Public/OctoOdyssey/OctoPawn.h` + `Private/` | `AOctoPawn` — the octopus: one simulating `USphereComponent` body + 8 welded `UCapsuleComponent` arms + non-colliding visual meshes |
-| `Public/OctoOdyssey/OctoGameMode.h` + `Private/` | `AOctoGameMode` — spawns the octopus/camera, routes the first 8 buttons to arms, reloads on goal |
+| `Public/OctoOdyssey/OctoBodySpring.h` + `Private/` | Pure, world-free head-spring math (`namespace OctoBody`) — damped spring, chain bend, impact squash |
+| `Public/OctoOdyssey/OctoSkeleton.h` + `Private/` | The SK_Okto rig contract: `FOctoArmBones` / `FOctoBodyBones` measured out of the mesh's own reference skeleton, never hard-coded |
+| `Public/OctoOdyssey/OctoTuning.h` + `Private/` | `FOctoTuning` — every game-feel knob, plus the descriptor table the dev menu, the sliders and the JSON/ini round trip all read |
+| `Public/OctoOdyssey/OctoTuningSubsystem.h` + `Private/` | `UOctoTuningSubsystem` — GameInstance-scoped live tuning, so it survives the `OpenLevel` that Accept triggers |
+| `Public/OctoOdyssey/OctoPawn.h` + `Private/` | `AOctoPawn` — the octopus: one simulating `USphereComponent` body + 8 welded `UCapsuleComponent` arms + SK_Okto posed bone-by-bone from collision state |
+| `Public/OctoOdyssey/OctoGameMode.h` + `Private/` | `AOctoGameMode` — spawns the octopus/camera, routes the first 8 buttons to arms, reloads on goal, owns the Tab dev menu |
 | `Public/OctoOdyssey/OctoCamera.h` + `Private/` | `AOctoCamera` — side-on follow camera (looks along +X at the Y-Z play plane) |
 | `Public/OctoOdyssey/OctoGoalFlag.h` + `Private/` | `AOctoGoalFlag` — placeable overlap trigger, broadcasts `OnReached` |
 | `Public/OctoOdyssey/OctoSpawnPoint.h` + `Private/` | `AOctoSpawnPoint` — placeable spawn marker |
-| `Private/OctoOdyssey/Tests/OctoArmMathTest.cpp` | `OctoArm::` unit tests (11 tests) |
+| `Private/OctoOdyssey/Tests/OctoArmMathTest.cpp` | `OctoArm::` unit tests |
+| `Private/OctoOdyssey/Tests/OctoBodySpringTest.cpp` | `OctoBody::` unit tests — the spring, the chain bend round trip, the squash |
+| `Private/OctoOdyssey/Tests/OctoSkeletonTest.cpp` | The guard rail on `/Game/OctoOdyssey/SK_Okto` — a re-export that breaks the rig fails here instead of mis-posing silently |
+| `Private/OctoOdyssey/Tests/OctoTuningTest.cpp` | Descriptor table, JSON and ini round trips |
 | `Private/OctoOdyssey/Tests/OctoRosterTest.cpp` | Roster slot-2 wiring guard |
+| `Game/Config/OctoTuning.ini` | The tuned values on disk, overlaid onto `FOctoTuning`'s defaults at startup |
 | `AI/build_octo_course.py` | Headless Python script that places the L_GameC greybox course (blocks, flag, spawn point, lights) — see its own docstring |
+
+**The skeletal mesh is posed entirely in C++.** There is no Control Rig asset, no
+AnimBP and no authored animation: `AOctoPawn` holds a `UPoseableMeshComponent` and
+writes `BoneSpaceTransforms` directly each tick, because every bone the octopus moves
+is computed from collision state. Two writers share one flush per frame —
+`TickArms` stretches each `Arm{N}` chain and places each `Hand{N}`, and
+`TickBodySpring` bends `Body -> Face -> Head1 -> Head2` from a damped spring that
+lags the body, is blocked by its own world sweep, and squashes the head on impact.
+The arms hang off `Root` rather than off the head chain, so the two can never
+interfere: the arms stay exactly on their colliders, which is the invariant the whole
+arm pose driver is built on.
 
 Registered exactly like slot 0: `FPartySessionState::InitDefaultRoster`
 (`PartySessionState.cpp`) sets `GameRoster[2].GameModeClassPath =

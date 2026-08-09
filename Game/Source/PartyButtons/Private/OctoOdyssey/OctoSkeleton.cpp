@@ -90,4 +90,67 @@ bool BuildArmBones(const USkeletalMesh& Mesh, TArray<FOctoArmBones>& OutArms)
     return true;
 }
 
+bool BuildBodyBones(const USkeletalMesh& Mesh, FOctoBodyBones& OutBody)
+{
+    OutBody = FOctoBodyBones();
+
+    const FReferenceSkeleton& RefSkeleton = Mesh.GetRefSkeleton();
+    const TArray<FTransform>& BoneSpace   = RefSkeleton.GetRefBonePose();
+    const TArray<FTransform>  CS          = ComposeRefPoseComponentSpace(Mesh);
+
+    const int32 NumChainBones = UE_ARRAY_COUNT(BodyChainBoneNames);
+
+    OutBody.ChainIndices.Reserve(NumChainBones);
+    OutBody.RefLocal.Reserve(NumChainBones);
+    OutBody.RefCS.Reserve(NumChainBones);
+
+    for (int32 i = 0; i < NumChainBones; i++)
+    {
+        const int32 Index = RefSkeleton.FindBoneIndex(FName(BodyChainBoneNames[i]));
+        if (Index == INDEX_NONE)
+        {
+            UE_LOG(LogPartyButtons, Warning,
+                TEXT("OctoSkeleton: %s is missing head-chain bone '%s'. Not posing the head."),
+                *Mesh.GetName(), BodyChainBoneNames[i]);
+            OutBody = FOctoBodyBones();
+            return false;
+        }
+
+        // The bend composes down the chain, so the chain has to BE a chain — a re-export
+        // that re-parented Head1 under Body would otherwise pose silently and wrongly.
+        if (i > 0 && RefSkeleton.GetParentIndex(Index) != OutBody.ChainIndices[i - 1])
+        {
+            UE_LOG(LogPartyButtons, Warning,
+                TEXT("OctoSkeleton: %s's '%s' is not parented to '%s'. Not posing the head."),
+                *Mesh.GetName(), BodyChainBoneNames[i], BodyChainBoneNames[i - 1]);
+            OutBody = FOctoBodyBones();
+            return false;
+        }
+
+        OutBody.ChainIndices.Add(Index);
+        OutBody.RefLocal.Add(BoneSpace[Index]);
+        OutBody.RefCS.Add(CS[Index]);
+    }
+
+    const int32 RootParent = RefSkeleton.GetParentIndex(OutBody.ChainIndices[0]);
+    OutBody.RootParentRefCS = (RootParent == INDEX_NONE) ? FTransform::Identity : CS[RootParent];
+
+    OutBody.TipRestCS = OutBody.RefCS.Last().GetLocation();
+
+    const FVector BaseToTip = OutBody.TipRestCS - OutBody.RefCS[0].GetLocation();
+    OutBody.RestDir     = BaseToTip.GetSafeNormal();
+    OutBody.ChainLength = BaseToTip.Size();
+
+    if (OutBody.RestDir.IsNearlyZero() || OutBody.ChainLength <= UE_KINDA_SMALL_NUMBER)
+    {
+        UE_LOG(LogPartyButtons, Warning,
+            TEXT("OctoSkeleton: %s's head chain is degenerate (restDir=%s, length=%.3f). Not posing the head."),
+            *Mesh.GetName(), *OutBody.RestDir.ToString(), OutBody.ChainLength);
+        OutBody = FOctoBodyBones();
+        return false;
+    }
+
+    return true;
+}
+
 } // namespace OctoSkeleton

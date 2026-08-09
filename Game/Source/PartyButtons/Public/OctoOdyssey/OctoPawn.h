@@ -4,12 +4,14 @@
 #include "GameFramework/Pawn.h"
 #include "Containers/StaticArray.h"
 #include "OctoOdyssey/OctoArmMath.h"
+#include "OctoOdyssey/OctoBodySpring.h"
 #include "OctoOdyssey/OctoSkeleton.h"
 #include "OctoOdyssey/OctoTuning.h"
 #include "OctoPawn.generated.h"
 
 class USphereComponent;
 class UCapsuleComponent;
+class UPrimitiveComponent;
 class UStaticMeshComponent;
 class UPoseableMeshComponent;
 class UPhysicalMaterial;
@@ -45,6 +47,15 @@ class UPhysicalMaterial;
  * same OctoArm:: offsets the colliders use, and both driven by the ACHIEVED
  * extension so the mesh can never render an arm through a wall the collider
  * stopped at. See ApplyArmMeshPose and OctoSkeleton.h for the rig contract.
+ *
+ * The HEAD is the one exception to "collision is the source of truth", and
+ * deliberately so: SK_Okto's Body -> Face -> Head1 -> Head2 chain is driven by a
+ * damped spring (TickBodySpring, OctoBodySpring.h) that lags the body, overshoots
+ * when it stops, and is blocked by its own world sweep. That head is a PASSENGER.
+ * It never pushes BodySphere, because the launch model below depends on nothing but
+ * arm speed and a head shoving the body would quietly break that. The chain also
+ * hangs off Root rather than off the arms, so bending it can never move an arm off
+ * its collider.
  *
  * "Arms are one unchangeable unit; no outside force may change their
  * relative position" is satisfied by construction: welded shapes are
@@ -169,6 +180,43 @@ private:
     void TickArms(float DeltaSeconds);
 
     /**
+     * Step the head spring and pose the Body -> Face -> Head1 -> Head2 chain from it.
+     *
+     * Runs after TickArms so both writers have finished before Tick's single pose flush.
+     * Writes only the four chain bones, so it cannot disturb the arms.
+     *
+     * The head particle is kept in the Y-Z play plane (its X pinned to the anchor's) for
+     * the same reason the body's DOF lock exists: the chain points straight down the
+     * camera's view axis, so X motion would read as the head growing rather than moving,
+     * and an X push from a wall's front face could park the head there indefinitely.
+     */
+    void TickBodySpring(float DeltaSeconds);
+
+    /**
+     * Sweep the head sphere from StartWorld to its newly stepped position and, on a block,
+     * park it at the hit and take the inward speed out of its velocity.
+     *
+     * One-way by design: nothing here touches BodySphere. Ignores this actor, so the head
+     * can never collide with the octopus's own arm capsules.
+     */
+    void ResolveHeadCollision(const FVector& StartWorld);
+
+    /**
+     * Feed an impact to the squash oscillator, keeping the strongest hit of the frame.
+     * WorldNormal points out of the surface that was struck; Speed is how fast the head
+     * (or the body) was closing on it.
+     */
+    void AddSquashImpulse(const FVector& WorldNormal, float Speed);
+
+    /** Rest the head spring and cancel any squash — used on spawn and on freeze. */
+    void ResetBodySpring();
+
+    /** BodySphere's hit events, bound in BeginPlay. The "landed hard" half of the squash trigger. */
+    UFUNCTION()
+    void OnBodyHit(UPrimitiveComponent* HitComponent, AActor* OtherActor, UPrimitiveComponent* OtherComponent,
+                   FVector NormalImpulse, const FHitResult& Hit);
+
+    /**
      * Steps one arm and, if it is planted against something, appends this
      * frame's push-off to OutPushes. Never touches the body's velocity itself —
      * see TickArms for why every arm's push must be computed against the same
@@ -278,6 +326,26 @@ private:
      * renders at its rest pose rather than crashing — see OctoSkeleton::BuildArmBones.
      */
     TArray<FOctoArmBones> ArmBones;
+
+    /**
+     * SK_Okto's head chain, measured alongside ArmBones in BeginPlay. Resolved
+     * INDEPENDENTLY of the arms so a rig that loses one still animates the other —
+     * see OctoSkeleton::BuildBodyBones. Invalid means "render the head rigid".
+     */
+    FOctoBodyBones BodyBones;
+
+    /** The head particle. World space — see OctoBody::StepSpring. */
+    OctoBody::FHeadSpringState HeadSpring;
+
+    /** Last frame's head anchor, differentiated into the anchor velocity the spring damps against. */
+    FVector PrevHeadTargetWorld = FVector::ZeroVector;
+
+    /** Squash oscillator: current depth and its rate. 0 is an undeformed head. */
+    float SquashAmount   = 0.f;
+    float SquashVelocity = 0.f;
+
+    /** Component-space normal of the impact currently being squashed along. */
+    FVector SquashNormalCS = FVector::ZAxisVector;
 
     /** True while the intro overlay has the round paused — see SetPhysicsFrozen. */
     bool bPhysicsFrozen = false;

@@ -129,6 +129,103 @@ struct PARTYBUTTONS_API FOctoTuning
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Arms")
     bool bSweepPhysicsBodies = false;
 
+    // ---- Body -------------------------------------------------------------
+    //
+    // SK_Okto's head chain (Body -> Face -> Head1 -> Head2) driven as a damped spring —
+    // see OctoBodySpring.h for the model and AOctoPawn::TickBodySpring for the wiring.
+    //
+    // Every value here is purely visual: the head is a passenger that the world can stop
+    // but that never pushes the physics body back. So unlike the geometry block above,
+    // all of it is live-appliable and previews mid-round.
+
+    /** Master switch. Off restores the reference pose exactly — the head goes rigid again. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
+    bool bBodySpring = true;
+
+    /** How fast the head oscillates. Higher is tighter and jellier; lower is a slow, heavy lope. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
+    float BodySpringFrequencyHz = 2.5f;
+
+    /**
+     * Damping RATIO, not a coefficient: 1 is critical (no overshoot at all), below 1 rings.
+     * The default sits well under 1 on purpose — the overshoot IS the flail when the
+     * octopus slams to a halt, and a critically damped head just looks stiff.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
+    float BodySpringDamping = 0.35f;
+
+    /** Scales the deflection the spring produces before it is posed. The "how floppy" dial. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
+    float BodyLagScale = 1.f;
+
+    /** Ceiling on head deflection, in cm, before the bend is computed. 0 disables the clamp. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
+    float BodyMaxDeflection = 45.f;
+
+    /** Fraction of WorldGravityZ applied to the head particle, so it droops instead of hanging level. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
+    float BodyGravityScale = 0.25f;
+
+    /**
+     * How the bend is shared out along the chain. 0 spreads it evenly; 1 crowds it into the
+     * joints nearest the head, which keeps the chain's BASE nearly still — and the base is
+     * the part of the body the eight rigid arms emerge from, so this is the knob that stops
+     * the skin tearing at the arm roots.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
+    float BodyBendTaper = 0.7f;
+
+    /** Hard limit on the total bend. The real cap on how far the head can throw. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
+    float BodyMaxBendDegrees = 55.f;
+
+    /** Sweep the head sphere (radius SphereRadius) against the world so it cannot sink into geometry. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
+    bool bHeadCollision = true;
+
+    /**
+     * Added to the head sphere's X before the sweep. 0 tests it where the bone actually is.
+     *
+     * This exists because the head chain points along -X, ~85cm out of the play plane and
+     * TOWARD the camera, while the course is authored at X in [0, 400] with its front face
+     * coplanar with the play plane. At offset 0 the head therefore sweeps through empty space
+     * in front of the level and hits nothing until the course is widened forward — which in
+     * turn puts geometry between the camera and the octopus. Set this to ~85 to test the head
+     * in the play plane instead, exactly where BodySphere already collides, and the head
+     * collides against the course as authored at the cost of the collision being a plane off
+     * from the visual. Which trade is right is a look-at-it call, so it is a slider.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
+    float HeadCollisionOffsetX = 0.f;
+
+    /** How much of the head's inward speed survives an impact, reversed. 0 is a dead stop. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
+    float HeadCollisionRestitution = 0.3f;
+
+    /** Fraction of the head's ACROSS-surface speed killed on impact. 1 makes the head stick and drag. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
+    float HeadCollisionFriction = 0.4f;
+
+    /** Squash and stretch the head on hard impacts. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
+    bool bHeadSquash = true;
+
+    /** Deepest squash, as a fraction: 0.35 flattens the head to 65% along the impact normal. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
+    float HeadSquashMax = 0.35f;
+
+    /** Impact speed (cm/s) that produces HeadSquashMax. Anything faster is clamped to it. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
+    float HeadSquashFullSpeed = 1200.f;
+
+    /** How fast the squash wobbles out. Deliberately well above the body spring — a jiggle, not a lope. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
+    float HeadSquashFrequencyHz = 6.f;
+
+    /** Damping ratio for that wobble. Low enough to bounce two or three times before settling. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Body")
+    float HeadSquashDamping = 0.25f;
+
     // ---- Physics ----------------------------------------------------------
 
     /**

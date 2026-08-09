@@ -33,9 +33,19 @@ level load/save deliberately keeps using the deprecated API here.
 Coordinate conventions (see Public/OctoOdyssey/OctoGameMode.h /
 AOctoCamera's class comment):
   - The octopus is pinned to X = 0 (the "play plane"); the camera sits at
-    X = -2000 looking +X. All playfield geometry therefore lives at
-    X in [0, 400] (front face coplanar with the play plane) so it never
-    occludes the octopus.
+    X = -2000 looking +X. Playfield geometry spans X in [-125, 400].
+  - That front face at -125 is DELIBERATE and it costs something. Geometry
+    used to stop at X = 0, coplanar with the play plane, precisely so it
+    could never occlude the octopus. But SK_Okto's head chain runs along
+    -X: the head sphere sits ~85cm out of the play plane, toward the
+    camera, spanning X in [-125, -45]. Against a course that stopped at 0
+    the head swept through empty space and collided with nothing at all.
+    Reaching it means bringing geometry forward past the octopus, so at
+    contact points the ground now draws over the front of the body.
+    The escape hatch is FOctoTuning::HeadCollisionOffsetX: set it to ~85
+    and the head is tested in the play plane instead, at which point every
+    block here can go back to (200.0, ..., 4.0, ...) and the occlusion
+    goes away. Pick one; do not half-do both.
   - Ground top surface is Z = 0. Everything is on 100cm increments.
   - Ascending ramps use negative Roll, descending use positive Roll (derived
     from FRotator(0,0,Roll) mapping +Z -> (0, sin Roll, cos Roll) — see
@@ -55,22 +65,28 @@ CUBE_MESH_PATH = "/Engine/BasicShapes/Cube.Cube"
 
 # (label, location (x,y,z), rotation (pitch,yaw,roll), scale (sx,sy,sz))
 # Scale is in meters — the engine Cube is a 100cm cube, so scale == size in meters.
+#
+# Every playfield block is centred at X = 137.5 with an X-scale of 5.25m, i.e. it spans
+# X in [-125, 400]: the back face is where it always was, and the front face reaches far
+# enough forward to catch the head sphere (see the coordinate conventions above). The
+# ramps are rolled about X, which leaves their X extent untouched. Backdrop is the one
+# exception — at X = 500 it is behind everything and has no head to catch.
 BLOCKS = [
-    ("Ground_A",        (200.0, 1600.0, -100.0), (0.0, 0.0, 0.0),   (4.0, 32.0, 2.0)),
-    ("PitFloor",         (200.0, 3400.0, -200.0), (0.0, 0.0, 0.0),   (4.0, 4.0, 2.0)),
-    ("Ground_B",         (200.0, 4800.0, -100.0), (0.0, 0.0, 0.0),   (4.0, 24.0, 2.0)),
-    ("Backdrop",         (500.0, 3000.0, 800.0),  (0.0, 0.0, 0.0),   (2.0, 60.0, 16.0)),
-    ("StartWall",        (200.0, -100.0, 300.0),  (0.0, 0.0, 0.0),   (4.0, 2.0, 6.0)),
-    ("EndWall",           (200.0, 6100.0, 300.0),  (0.0, 0.0, 0.0),   (4.0, 2.0, 6.0)),
-    ("Step_1m",           (200.0, 1000.0, 50.0),   (0.0, 0.0, 0.0),   (4.0, 4.0, 1.0)),
-    ("Ramp_Up14",         (200.0, 1900.0, 100.0),  (0.0, 0.0, -14.0), (4.0, 8.0, 0.5)),
-    ("Plateau",           (200.0, 2500.0, 100.0),  (0.0, 0.0, 0.0),   (4.0, 6.0, 2.0)),
-    ("Box_A",             (200.0, 4000.0, 50.0),   (0.0, 0.0, 0.0),   (4.0, 2.0, 1.0)),
-    ("Box_B",             (200.0, 4300.0, 150.0),  (0.0, 0.0, 0.0),   (4.0, 2.0, 3.0)),
-    ("Box_C",             (200.0, 4600.0, 250.0),  (0.0, 0.0, 0.0),   (4.0, 2.0, 5.0)),
-    ("Ramp_Down14",       (200.0, 5100.0, 300.0),  (0.0, 0.0, 14.0),  (4.0, 6.0, 0.5)),
-    ("Ceiling_Squeeze",   (200.0, 5500.0, 250.0),  (0.0, 0.0, 0.0),   (4.0, 4.0, 1.0)),
-    ("GoalPedestal",      (200.0, 5900.0, 50.0),   (0.0, 0.0, 0.0),   (4.0, 2.0, 1.0)),
+    ("Ground_A",          (137.5, 1600.0, -100.0), (0.0, 0.0, 0.0),   (5.25, 32.0, 2.0)),
+    ("PitFloor",          (137.5, 3400.0, -200.0), (0.0, 0.0, 0.0),   (5.25, 4.0, 2.0)),
+    ("Ground_B",          (137.5, 4800.0, -100.0), (0.0, 0.0, 0.0),   (5.25, 24.0, 2.0)),
+    ("Backdrop",          (500.0, 3000.0, 800.0),  (0.0, 0.0, 0.0),   (2.0, 60.0, 16.0)),
+    ("StartWall",         (137.5, -100.0, 300.0),  (0.0, 0.0, 0.0),   (5.25, 2.0, 6.0)),
+    ("EndWall",           (137.5, 6100.0, 300.0),  (0.0, 0.0, 0.0),   (5.25, 2.0, 6.0)),
+    ("Step_1m",           (137.5, 1000.0, 50.0),   (0.0, 0.0, 0.0),   (5.25, 4.0, 1.0)),
+    ("Ramp_Up14",         (137.5, 1900.0, 100.0),  (0.0, 0.0, -14.0), (5.25, 8.0, 0.5)),
+    ("Plateau",           (137.5, 2500.0, 100.0),  (0.0, 0.0, 0.0),   (5.25, 6.0, 2.0)),
+    ("Box_A",             (137.5, 4000.0, 50.0),   (0.0, 0.0, 0.0),   (5.25, 2.0, 1.0)),
+    ("Box_B",             (137.5, 4300.0, 150.0),  (0.0, 0.0, 0.0),   (5.25, 2.0, 3.0)),
+    ("Box_C",             (137.5, 4600.0, 250.0),  (0.0, 0.0, 0.0),   (5.25, 2.0, 5.0)),
+    ("Ramp_Down14",       (137.5, 5100.0, 300.0),  (0.0, 0.0, 14.0),  (5.25, 6.0, 0.5)),
+    ("Ceiling_Squeeze",   (137.5, 5500.0, 250.0),  (0.0, 0.0, 0.0),   (5.25, 4.0, 1.0)),
+    ("GoalPedestal",      (137.5, 5900.0, 50.0),   (0.0, 0.0, 0.0),   (5.25, 2.0, 1.0)),
 ]
 
 # (label, location, rotation) — pitch,yaw,roll.
@@ -99,11 +115,26 @@ def clear_existing_course(actor_subsystem):
 
 
 def spawn_block(actor_subsystem, cube_mesh, label, location, rotation, scale):
-    actor = actor_subsystem.spawn_actor_from_object(
-        cube_mesh, unreal.Vector(*location), make_rotator(*rotation))
+    # spawn_actor_from_CLASS, not spawn_actor_from_OBJECT. Handing a mesh asset to
+    # spawn_actor_from_object routes through UPlacementSubsystem, which in a
+    # -run=pythonscript commandlet has no registered asset factories and dereferences
+    # null: FindAssetFactoryFromAssetData, EXCEPTION_ACCESS_VIOLATION reading 0x40, hard
+    # crash on the very first block. Spawning the actor class and assigning the mesh
+    # afterwards reaches the same result without touching the placement path at all.
+    # (spawn_actor_from_class is what spawn_class/spawn_light already use, and they
+    # have always worked here — which is the clue.)
+    actor = actor_subsystem.spawn_actor_from_class(
+        unreal.StaticMeshActor, unreal.Vector(*location), make_rotator(*rotation))
     if not actor:
         unreal.log_error(f"[build_octo_course] Failed to spawn block '{label}'.")
         return None
+
+    mesh_component = actor.get_component_by_class(unreal.StaticMeshComponent)
+    if not mesh_component:
+        unreal.log_error(f"[build_octo_course] Block '{label}' has no static mesh component.")
+        return None
+    mesh_component.set_static_mesh(cube_mesh)
+
     actor.set_actor_scale3d(unreal.Vector(*scale))
     actor.set_actor_label(label)
     actor.tags = [COURSE_TAG]

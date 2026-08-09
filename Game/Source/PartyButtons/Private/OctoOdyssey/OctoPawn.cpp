@@ -258,15 +258,28 @@ void AOctoPawn::BeginPlay()
     // on registration), so this is the earliest the rig can be measured. A failure
     // leaves ArmBones empty, which every pose write below treats as "leave SK_Okto
     // at its rest pose" — the octopus renders fully extended but still plays.
+    //
+    // The arms and the head are measured independently and neither gates the other:
+    // an export that renamed a head bone should still animate eight working arms.
     if (OctoMesh && OctoMesh->GetSkinnedAsset())
     {
         if (const USkeletalMesh* Skeletal = Cast<USkeletalMesh>(OctoMesh->GetSkinnedAsset()))
         {
             OctoSkeleton::BuildArmBones(*Skeletal, ArmBones);
+            OctoSkeleton::BuildBodyBones(*Skeletal, BodyBones);
         }
     }
 
-    if (ArmBones.IsEmpty())
+    // Hit events are half of the squash trigger (the other half is the head's own
+    // sweep). This is an event flag, not geometry: it touches no shape and cannot
+    // break the weld, so unlike RebuildGeometry it is safe here.
+    if (BodySphere)
+    {
+        BodySphere->SetNotifyRigidBodyCollision(true);
+        BodySphere->OnComponentHit.AddDynamic(this, &AOctoPawn::OnBodyHit);
+    }
+
+    if (ArmBones.IsEmpty() && !BodyBones.IsValid())
     {
         UE_LOG(LogPartyButtons, Warning,
             TEXT("AOctoPawn: no usable SK_Okto rig — the skeletal mesh will not follow the arms."));
@@ -285,7 +298,39 @@ void AOctoPawn::BeginPlay()
     {
         ApplyArmMeshPose(i, Arms[i].Extension);
     }
+
+    // Seed the head particle ON its anchor. Left uninitialised it would spring in from
+    // the world origin on frame one, which at spawn height reads as the octopus whipping
+    // its head up off the floor for no reason.
+    ResetBodySpring();
+
     OctoMesh->MarkRefreshTransformDirty();
+}
+
+void AOctoPawn::ResetBodySpring()
+{
+    SquashAmount   = 0.f;
+    SquashVelocity = 0.f;
+
+    if (!OctoMesh || !BodyBones.IsValid())
+    {
+        return;
+    }
+
+    PrevHeadTargetWorld = OctoMesh->GetComponentTransform().TransformPosition(BodyBones.TipRestCS);
+    HeadSpring.Reset(PrevHeadTargetWorld);
+
+    // Put the chain back on its reference pose so a disabled or reset spring leaves no
+    // trace of whatever bend was up at the time.
+    TArray<FTransform>& Pose = OctoMesh->BoneSpaceTransforms;
+    for (int32 i = 0; i < BodyBones.ChainIndices.Num(); i++)
+    {
+        const int32 BoneIndex = BodyBones.ChainIndices[i];
+        if (Pose.IsValidIndex(BoneIndex))
+        {
+            Pose[BoneIndex] = BodyBones.RefLocal[i];
+        }
+    }
 }
 
 void AOctoPawn::ApplyArmMeshPose(int32 ArmIndex, float Extension)
@@ -317,6 +362,191 @@ void AOctoPawn::ApplyArmMeshPose(int32 ArmIndex, float Extension)
     // reference values: the hand is a ball, and it is meant to stay the collider's size.
     const FVector TargetCS = Bones.RestDirection * TipOffset;
     Pose[Bones.HandIndex].SetTranslation(Bones.HandParentRestCS.InverseTransformPosition(TargetCS));
+}
+
+void AOctoPawn::TickBodySpring(float DeltaSeconds)
+{
+    if (!OctoMesh || !BodyBones.IsValid() || DeltaSeconds <= 0.f)
+    {
+        return;
+    }
+
+    if (!Tuning.bBodySpring)
+    {
+        // Cheap and total: restore the reference pose and park the particle on its anchor,
+        // so toggling the spring back on mid-round starts from rest instead of from a stale
+        // deflection the player never saw accumulate.
+        ResetBodySpring();
+        return;
+    }
+
+    // The MESH component's transform, not the actor's — the component carries the
+    // ArmAngleOffsetDegrees roll (see RebuildGeometry), so the actor's transform would
+    // place the head 22.5 degrees off its own bones.
+    const FTransform MeshTransform = OctoMesh->GetComponentTransform();
+    const FVector    TargetWorld   = MeshTransform.TransformPosition(BodyBones.TipRestCS);
+
+    // Differentiated rather than read off the body: this picks up the octopus's ROLL for
+    // free, and roll is what swings the head hardest. An explicit v + w x r would have to
+    // rediscover that, and would drift out of step with whatever moved the actor.
+    const FVector TargetVelocity = (TargetWorld - PrevHeadTargetWorld) / DeltaSeconds;
+    PrevHeadTargetWorld = TargetWorld;
+
+    const FVector SweepStart = HeadSpring.Position;
+
+    const FVector ExtraAccel(0.f, 0.f, Tuning.WorldGravityZ * Tuning.BodyGravityScale);
+    OctoBody::StepSpring(
+        HeadSpring, TargetWorld, TargetVelocity,
+        Tuning.BodySpringFrequencyHz, Tuning.BodySpringDamping, ExtraAccel, DeltaSeconds);
+
+    if (Tuning.bHeadCollision)
+    {
+        ResolveHeadCollision(SweepStart);
+    }
+
+    // Pin the particle to the play plane. See the declaration for why: X motion on a chain
+    // aimed down the camera's own axis reads as scaling, and a front face pushing along X
+    // could otherwise park the head off-plane for good.
+    HeadSpring.Position.X = TargetWorld.X;
+    HeadSpring.Velocity.X = 0.f;
+
+    OctoBody::StepSquash(
+        SquashAmount, SquashVelocity,
+        Tuning.HeadSquashFrequencyHz, Tuning.HeadSquashDamping, DeltaSeconds);
+
+    const FVector HeadCS     = MeshTransform.InverseTransformPosition(HeadSpring.Position);
+    const FVector Deflection = OctoBody::ConstrainDeflection(
+        (HeadCS - BodyBones.TipRestCS) * Tuning.BodyLagScale, Tuning.BodyMaxDeflection);
+
+    TArray<FTransform> ChainPose;
+    FTransform         TipCS = FTransform::Identity;
+    OctoBody::BuildChainBend(
+        BodyBones, BodyBones.TipRestCS + Deflection,
+        Tuning.BodyMaxBendDegrees, Tuning.BodyBendTaper, ChainPose, &TipCS);
+
+    TArray<FTransform>& Pose = OctoMesh->BoneSpaceTransforms;
+    for (int32 i = 0; i < BodyBones.ChainIndices.Num(); i++)
+    {
+        const int32 BoneIndex = BodyBones.ChainIndices[i];
+        if (ChainPose.IsValidIndex(i) && Pose.IsValidIndex(BoneIndex))
+        {
+            Pose[BoneIndex] = ChainPose[i];
+        }
+    }
+
+    // ---- Squash: the tip's scale, on top of the bend ----------------------
+    //
+    // Written last and multiplied in, because BuildChainBend restores the reference scale
+    // on every bone it touches — assigning it before the bend would silently do nothing.
+    if (Tuning.bHeadSquash && SquashAmount > 0.f)
+    {
+        const int32 TipIndex = BodyBones.ChainIndices.Last();
+        if (Pose.IsValidIndex(TipIndex))
+        {
+            // The squash axes are the TIP BONE's, so the normal has to leave component
+            // space through the tip's POSED rotation — through its reference one, a bent
+            // head would squash along the wrong axis.
+            const FVector NormalInBone = TipCS.GetRotation().UnrotateVector(SquashNormalCS);
+            Pose[TipIndex].SetScale3D(
+                Pose[TipIndex].GetScale3D() * OctoBody::SquashScale(NormalInBone, SquashAmount));
+        }
+    }
+}
+
+void AOctoPawn::ResolveHeadCollision(const FVector& StartWorld)
+{
+    UWorld* World = GetWorld();
+    if (!World)
+    {
+        return;
+    }
+
+    // See FOctoTuning::HeadCollisionOffsetX — the head bone sits ~85cm out of the play
+    // plane, so where this sphere is tested is a tuning decision, not a fixed one.
+    const FVector Offset(Tuning.HeadCollisionOffsetX, 0.f, 0.f);
+    const FVector Start = StartWorld + Offset;
+    const FVector End   = HeadSpring.Position + Offset;
+
+    if ((End - Start).IsNearlyZero())
+    {
+        return;
+    }
+
+    // Same object types as the arm sweep, and the same reason for QueryParams ignoring this
+    // actor: without it the head would collide with the octopus's own arm capsules.
+    FCollisionObjectQueryParams ObjectParams;
+    ObjectParams.AddObjectTypesToQuery(ECC_WorldStatic);
+    ObjectParams.AddObjectTypesToQuery(ECC_WorldDynamic);
+
+    FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(OctoHeadSweep), /*bTraceComplex=*/false, this);
+
+    FHitResult Hit;
+    const bool bBlocked = World->SweepSingleByObjectType(
+        Hit, Start, End, FQuat::Identity, ObjectParams,
+        FCollisionShape::MakeSphere(Tuning.SphereRadius), QueryParams);
+
+    if (!bBlocked)
+    {
+        return;
+    }
+
+    // Already inside something: let the spring pull itself out rather than solving a
+    // penetration we have no good answer for. Fighting it here is how a head gets stuck.
+    if (Hit.bStartPenetrating)
+    {
+        return;
+    }
+
+    HeadSpring.Position = Hit.Location - Offset;
+
+    const FVector Normal      = Hit.ImpactNormal;
+    const float   NormalSpeed = static_cast<float>(FVector::DotProduct(HeadSpring.Velocity, Normal));
+    const FVector Tangential  = HeadSpring.Velocity - Normal * NormalSpeed;
+
+    // Only motion INTO the surface bounces; motion already leaving it is left alone, so a
+    // head skimming out of a contact isn't yanked back down.
+    const float OutwardSpeed = (NormalSpeed < 0.f)
+        ? -NormalSpeed * FMath::Clamp(Tuning.HeadCollisionRestitution, 0.f, 1.f)
+        : NormalSpeed;
+
+    HeadSpring.Velocity =
+        Tangential * (1.f - FMath::Clamp(Tuning.HeadCollisionFriction, 0.f, 1.f)) + Normal * OutwardSpeed;
+
+    if (NormalSpeed < 0.f)
+    {
+        AddSquashImpulse(Normal, -NormalSpeed);
+    }
+}
+
+void AOctoPawn::AddSquashImpulse(const FVector& WorldNormal, float Speed)
+{
+    if (!Tuning.bHeadSquash || !OctoMesh || Tuning.HeadSquashFullSpeed <= 0.f)
+    {
+        return;
+    }
+
+    const float Target = Tuning.HeadSquashMax * FMath::Clamp(Speed / Tuning.HeadSquashFullSpeed, 0.f, 1.f);
+
+    // Strongest hit wins for the frame. A softer graze arriving right after a hard landing
+    // must not reset the wobble the landing started — it has nothing new to say.
+    if (Target <= SquashAmount)
+    {
+        return;
+    }
+
+    SquashAmount   = Target;
+    SquashVelocity = 0.f;
+    SquashNormalCS = OctoMesh->GetComponentTransform().InverseTransformVectorNoScale(WorldNormal).GetSafeNormal();
+}
+
+void AOctoPawn::OnBodyHit(UPrimitiveComponent* /*HitComponent*/, AActor* /*OtherActor*/,
+                          UPrimitiveComponent* /*OtherComponent*/, FVector NormalImpulse, const FHitResult& Hit)
+{
+    // Impulse over mass is the speed the contact actually took out of the body, which is a
+    // far better measure of "hit it hard" than the raw closing speed — a graze along a floor
+    // carries plenty of speed and almost no impulse.
+    const float Mass = FMath::Max(1.f, Tuning.BodyMassKg);
+    AddSquashImpulse(Hit.ImpactNormal, static_cast<float>(NormalImpulse.Size()) / Mass);
 }
 
 void AOctoPawn::ConfigureBodyPhysics()
@@ -427,8 +657,21 @@ void AOctoPawn::SetPhysicsFrozen(bool bFrozen)
 
         BodySphere->SetPhysicsLinearVelocity(FVector::ZeroVector);
         BodySphere->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+
+        // Tick early-outs while frozen, so a head left mid-wobble would hang there for the
+        // whole intro. Park it — "frozen" should look frozen.
+        ResetBodySpring();
+        if (OctoMesh && BodyBones.IsValid())
+        {
+            OctoMesh->MarkRefreshTransformDirty();
+        }
         return;
     }
+
+    // Re-anchor before the first live tick. PrevHeadTargetWorld is stale by however far
+    // the octopus was moved during the intro, and the spring differentiates that gap into
+    // an anchor velocity — a respawn would otherwise launch the head across the level.
+    ResetBodySpring();
 
     // Nothing has touched the octopus during the intro, so it's very likely
     // asleep by now — gravity alone won't wake it.
@@ -442,6 +685,14 @@ void AOctoPawn::Tick(float DeltaSeconds)
     if (bPhysicsFrozen) { return; }
 
     TickArms(DeltaSeconds);
+    TickBodySpring(DeltaSeconds);
+
+    // One flush for every bone written this frame — marking dirty per writer would re-walk
+    // the whole bone hierarchy nine times a frame for exactly the same result.
+    if (OctoMesh && (!ArmBones.IsEmpty() || BodyBones.IsValid()))
+    {
+        OctoMesh->MarkRefreshTransformDirty();
+    }
 }
 
 void AOctoPawn::NotifyArmPressed(int32 ArmIndex)
@@ -485,12 +736,8 @@ void AOctoPawn::TickArms(float DeltaSeconds)
         TickArm(i, DeltaSeconds, FrameStartVelocity, Pushes);
     }
 
-    // One flush for all eight arms — marking dirty per arm would re-walk the whole
-    // bone hierarchy eight times a frame for the same result.
-    if (OctoMesh && !ArmBones.IsEmpty())
-    {
-        OctoMesh->MarkRefreshTransformDirty();
-    }
+    // The pose is NOT flushed here — Tick does it once after TickBodySpring has written
+    // the head chain too.
 
     if (Pushes.IsEmpty()) { return; }
 

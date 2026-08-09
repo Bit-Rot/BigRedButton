@@ -220,6 +220,95 @@ bool FOctoSkeletonReachMatchesTuning::RunTest(const FString& Parameters)
 // --------------------------------------------------------------------------
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FOctoSkeletonBodyChainResolves,
+    "PartyButtons.Octo.Skeleton.BodyChainResolves",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FOctoSkeletonBodyChainResolves::RunTest(const FString& Parameters)
+{
+    USkeletalMesh* Mesh = LoadOctoMesh();
+    if (!TestNotNull(TEXT("SK_Okto loads"), Mesh))
+    {
+        return false;
+    }
+
+    FOctoBodyBones Body;
+    if (!TestTrue(TEXT("The head chain resolves"), OctoSkeleton::BuildBodyBones(*Mesh, Body)))
+    {
+        return false;
+    }
+
+    TestTrue(TEXT("The resolved chain reports itself valid"), Body.IsValid());
+    TestEqual(TEXT("Four bones: Body, Face, Head1, Head2"), Body.ChainIndices.Num(), 4);
+    TestEqual(TEXT("A reference bone-space transform per bone"), Body.RefLocal.Num(), Body.ChainIndices.Num());
+    TestEqual(TEXT("A reference component-space transform per bone"), Body.RefCS.Num(), Body.ChainIndices.Num());
+
+    const FReferenceSkeleton& RefSkeleton = Mesh->GetRefSkeleton();
+    for (int32 i = 0; i < Body.ChainIndices.Num(); i++)
+    {
+        TestEqual(
+            FString::Printf(TEXT("Chain entry %d is bone '%s'"), i, OctoSkeleton::BodyChainBoneNames[i]),
+            RefSkeleton.GetBoneName(Body.ChainIndices[i]),
+            FName(OctoSkeleton::BodyChainBoneNames[i]));
+    }
+
+    // The chain runs along component -X: straight out of the Y-Z play plane, toward the
+    // camera. A re-export that swung it into the play plane would leave the head bending
+    // along the axis the octopus travels on, which is not what the spring is tuned for.
+    TestTrue(FString::Printf(TEXT("Rest direction is unit length (%.4f)"), Body.RestDir.Size()),
+        FMath::IsNearlyEqual(Body.RestDir.Size(), 1.0, 0.001));
+    TestTrue(
+        FString::Printf(TEXT("The head points along -X (%s)"), *Body.RestDir.ToString()),
+        Body.RestDir.Equals(FVector(-1.0, 0.0, 0.0), 0.001));
+
+    // The head's collision sphere is drawn at the tip with the body's own radius, so a
+    // chain much shorter than that radius would bury the head inside the body sphere.
+    const FOctoTuning Defaults;
+    TestTrue(
+        FString::Printf(TEXT("The chain is longer than the body's radius (%.3f > %.1f)"),
+            Body.ChainLength, Defaults.SphereRadius),
+        Body.ChainLength > Defaults.SphereRadius);
+
+    TestTrue(
+        FString::Printf(TEXT("The tip sits at the chain's full length along the rest direction (%s)"),
+            *Body.TipRestCS.ToString()),
+        Body.TipRestCS.Equals(Body.RefCS[0].GetLocation() + Body.RestDir * Body.ChainLength, Tolerance));
+
+    // The bend composes down the chain, so it has to BE a chain.
+    for (int32 i = 1; i < Body.ChainIndices.Num(); i++)
+    {
+        TestEqual(
+            FString::Printf(TEXT("'%s' is parented to '%s'"),
+                OctoSkeleton::BodyChainBoneNames[i], OctoSkeleton::BodyChainBoneNames[i - 1]),
+            RefSkeleton.GetParentIndex(Body.ChainIndices[i]),
+            Body.ChainIndices[i - 1]);
+    }
+
+    // Nothing in the arm rig may live under the head chain, or bending the head would drag
+    // an arm off the collider it is contractually pinned to.
+    TArray<FOctoArmBones> Arms;
+    if (OctoSkeleton::BuildArmBones(*Mesh, Arms))
+    {
+        for (int32 i = 0; i < Arms.Num(); i++)
+        {
+            for (const int32 ChainIndex : Body.ChainIndices)
+            {
+                TestTrue(
+                    FString::Printf(TEXT("Arm %d's chain root is not parented into the head chain"), i),
+                    RefSkeleton.GetParentIndex(Arms[i].ChainRootIndex) != ChainIndex);
+                TestTrue(
+                    FString::Printf(TEXT("Hand %d is not parented into the head chain"), i),
+                    RefSkeleton.GetParentIndex(Arms[i].HandIndex) != ChainIndex);
+            }
+        }
+    }
+
+    return true;
+}
+
+// --------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FOctoSkeletonDumpRestPose,
     "PartyButtons.Octo.Skeleton.DumpRestPose",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)

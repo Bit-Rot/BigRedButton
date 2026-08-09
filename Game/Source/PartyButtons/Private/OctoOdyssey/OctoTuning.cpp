@@ -61,6 +61,25 @@ TArrayView<const FOctoTuningParam> OctoTuning::GetParams()
         BoolParam (TEXT("bPushAtImpactPoint"),     TEXT("Arms"),     &FOctoTuning::bPushAtImpactPoint),
         BoolParam (TEXT("bSweepPhysicsBodies"),    TEXT("Arms"),     &FOctoTuning::bSweepPhysicsBodies),
 
+        // ---- Body ----------------------------------------------------------
+        BoolParam (TEXT("bBodySpring"),            TEXT("Body"),     &FOctoTuning::bBodySpring),
+        FloatParam(TEXT("BodySpringFrequencyHz"),  TEXT("Body"),     &FOctoTuning::BodySpringFrequencyHz,   0.5f,   8.f,  0.25f),
+        FloatParam(TEXT("BodySpringDamping"),      TEXT("Body"),     &FOctoTuning::BodySpringDamping,       0.05f,  2.f,  0.05f),
+        FloatParam(TEXT("BodyLagScale"),           TEXT("Body"),     &FOctoTuning::BodyLagScale,            0.f,    2.f,  0.05f),
+        FloatParam(TEXT("BodyMaxDeflection"),      TEXT("Body"),     &FOctoTuning::BodyMaxDeflection,       0.f,  120.f,  5.f),
+        FloatParam(TEXT("BodyGravityScale"),       TEXT("Body"),     &FOctoTuning::BodyGravityScale,        0.f,    2.f,  0.05f),
+        FloatParam(TEXT("BodyBendTaper"),          TEXT("Body"),     &FOctoTuning::BodyBendTaper,           0.f,    1.f,  0.05f),
+        FloatParam(TEXT("BodyMaxBendDegrees"),     TEXT("Body"),     &FOctoTuning::BodyMaxBendDegrees,      0.f,   90.f,  5.f),
+        BoolParam (TEXT("bHeadCollision"),         TEXT("Body"),     &FOctoTuning::bHeadCollision),
+        FloatParam(TEXT("HeadCollisionOffsetX"),   TEXT("Body"),     &FOctoTuning::HeadCollisionOffsetX,  -200.f,  200.f, 5.f),
+        FloatParam(TEXT("HeadCollisionRestitution"), TEXT("Body"),   &FOctoTuning::HeadCollisionRestitution, 0.f,   1.f,  0.05f),
+        FloatParam(TEXT("HeadCollisionFriction"),  TEXT("Body"),     &FOctoTuning::HeadCollisionFriction,   0.f,    1.f,  0.05f),
+        BoolParam (TEXT("bHeadSquash"),            TEXT("Body"),     &FOctoTuning::bHeadSquash),
+        FloatParam(TEXT("HeadSquashMax"),          TEXT("Body"),     &FOctoTuning::HeadSquashMax,           0.f,    0.8f, 0.05f),
+        FloatParam(TEXT("HeadSquashFullSpeed"),    TEXT("Body"),     &FOctoTuning::HeadSquashFullSpeed,   200.f, 3000.f, 50.f),
+        FloatParam(TEXT("HeadSquashFrequencyHz"),  TEXT("Body"),     &FOctoTuning::HeadSquashFrequencyHz,   1.f,   15.f,  0.5f),
+        FloatParam(TEXT("HeadSquashDamping"),      TEXT("Body"),     &FOctoTuning::HeadSquashDamping,       0.05f,  2.f,  0.05f),
+
         // ---- Physics -------------------------------------------------------
         FloatParam(TEXT("BodyMassKg"),             TEXT("Physics"),  &FOctoTuning::BodyMassKg,              1.f,  200.f,  1.f),
         FloatParam(TEXT("LinearDamping"),          TEXT("Physics"),  &FOctoTuning::LinearDamping,           0.f,    5.f,  0.05f),
