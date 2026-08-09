@@ -518,4 +518,112 @@ bool FOctoClampLaunchVelocityPreservesDirection::RunTest(const FString& Paramete
     return true;
 }
 
+// --------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FOctoArmChainLengthScaleLandsTheTip,
+    "PartyButtons.Octo.ArmMath.ArmChainLengthScaleLandsTheTip",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FOctoArmChainLengthScaleLandsTheTip::RunTest(const FString& Parameters)
+{
+    // SK_Okto's measured rig, so this test fails for the same reason the real one
+    // would. PartyButtons.Octo.Skeleton.ReachMatchesTuning pins these to the asset.
+    constexpr float ChainOrigin = 31.928f;
+    constexpr float RestLength  = 78.072f;
+
+    const FOctoTuning Tuning;
+    const float SafeMax = FMath::Min(
+        Tuning.ArmMaxExtension,
+        OctoArm::MaxSafeExtension(Tuning.SphereRadius, Tuning.ArmRadius, Tuning.ArmHalfHeight));
+
+    // The defining property: whatever the scale is, the tip lands on the target.
+    for (float E = 0.f; E <= SafeMax + 0.001f; E += SafeMax / 8.f)
+    {
+        const float Target = OctoArm::HandCenterOffset(Tuning.SphereRadius, Tuning.ArmRadius, Tuning.ArmHalfHeight, E);
+        const float Scale  = OctoArm::ArmChainLengthScale(ChainOrigin, RestLength, Target);
+
+        TestTrue(
+            FString::Printf(TEXT("Extension %.1f puts the tip at %.3f"), E, Target),
+            FMath::IsNearlyEqual(ChainOrigin + RestLength * Scale, Target, 0.01f));
+    }
+
+    // Reference pose == full extension, so no stretch at all there.
+    const float FullTarget = OctoArm::HandCenterOffset(Tuning.SphereRadius, Tuning.ArmRadius, Tuning.ArmHalfHeight, SafeMax);
+    TestTrue(TEXT("Full extension is scale 1"),
+        FMath::IsNearlyEqual(OctoArm::ArmChainLengthScale(ChainOrigin, RestLength, FullTarget), 1.f, 0.001f));
+
+    // Retracted is emphatically NOT a scale to zero — the chain root is already
+    // inside the body, so the tip only has to reach the sphere's surface.
+    const float RetractedScale = OctoArm::ArmChainLengthScale(ChainOrigin, RestLength, Tuning.SphereRadius);
+    TestTrue(TEXT("Retracted scale is strictly positive"), RetractedScale > 0.f);
+    TestTrue(TEXT("Retracted scale is well under 1"), RetractedScale < 0.2f);
+    TestTrue(TEXT("Retracted tip lands on the body surface"),
+        FMath::IsNearlyEqual(ChainOrigin + RestLength * RetractedScale, Tuning.SphereRadius, 0.01f));
+
+    // Monotonic: a longer target is never a shorter arm.
+    float Previous = -1.f;
+    for (float E = 0.f; E <= SafeMax; E += 5.f)
+    {
+        const float Scale = OctoArm::ArmChainLengthScale(ChainOrigin, RestLength,
+            OctoArm::HandCenterOffset(Tuning.SphereRadius, Tuning.ArmRadius, Tuning.ArmHalfHeight, E));
+        TestTrue(FString::Printf(TEXT("Scale grows with extension at %.1f"), E), Scale > Previous);
+        Previous = Scale;
+    }
+
+    // ---- Degenerate inputs ------------------------------------------------
+
+    TestEqual(TEXT("A zero-length chain scales by 1 rather than dividing by zero"),
+        OctoArm::ArmChainLengthScale(ChainOrigin, 0.f, 100.f), 1.f);
+    TestEqual(TEXT("A negative chain length scales by 1"),
+        OctoArm::ArmChainLengthScale(ChainOrigin, -5.f, 100.f), 1.f);
+
+    // A target behind the chain root would mirror the arm back through the body.
+    TestEqual(TEXT("A target inside the chain root clamps to 0"),
+        OctoArm::ArmChainLengthScale(ChainOrigin, RestLength, ChainOrigin - 10.f), 0.f);
+
+    return true;
+}
+
+// --------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FOctoArmLengthAxisScaleOnlyTouchesItsAxis,
+    "PartyButtons.Octo.ArmMath.LengthAxisScaleOnlyTouchesItsAxis",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FOctoArmLengthAxisScaleOnlyTouchesItsAxis::RunTest(const FString& Parameters)
+{
+    // SK_Okto's arms come in on local -Y; the sign must not matter to a scale, or
+    // half the octopus would invert.
+    const FVector NegY = OctoArm::LengthAxisScale(FVector(0.f, -1.f, 0.f), 0.25f);
+    const FVector PosY = OctoArm::LengthAxisScale(FVector(0.f,  1.f, 0.f), 0.25f);
+
+    TestTrue(TEXT("-Y scales only Y"), NegY.Equals(FVector(1.f, 0.25f, 1.f), 0.001f));
+    TestTrue(TEXT("Axis sign does not matter"), NegY.Equals(PosY, 0.001f));
+
+    // Thickness is preserved — an extending arm gets longer, not fatter.
+    for (const FVector& Axis : { FVector::XAxisVector, FVector::YAxisVector, FVector::ZAxisVector })
+    {
+        for (const float Scale : { 0.f, 0.1f, 1.f, 3.f })
+        {
+            const FVector Result = OctoArm::LengthAxisScale(Axis, Scale);
+            for (int32 Component = 0; Component < 3; Component++)
+            {
+                const bool bIsLengthAxis = !FMath::IsNearlyZero(Axis[Component]);
+                TestTrue(
+                    FString::Printf(TEXT("Axis %s scale %.2f leaves component %d %s"),
+                        *Axis.ToString(), Scale, Component, bIsLengthAxis ? TEXT("scaled") : TEXT("at 1")),
+                    FMath::IsNearlyEqual(Result[Component], bIsLengthAxis ? Scale : 1.f, 0.001f));
+            }
+        }
+    }
+
+    // Scale 1 is the identity, which is what makes the reference pose a no-op.
+    TestTrue(TEXT("Scale 1 is the identity"),
+        OctoArm::LengthAxisScale(FVector(0.f, -1.f, 0.f), 1.f).Equals(FVector::OneVector, 0.001f));
+
+    return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

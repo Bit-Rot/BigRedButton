@@ -77,6 +77,9 @@ TArrayView<const FOctoTuningParam> OctoTuning::GetParams()
         FloatParam(TEXT("SurfaceStaticFriction"),  TEXT("Surface"),  &FOctoTuning::SurfaceStaticFriction,   0.f,    2.f,  0.05f),
         FloatParam(TEXT("SurfaceRestitution"),     TEXT("Surface"),  &FOctoTuning::SurfaceRestitution,      0.f,    1.f,  0.05f),
 
+        // ---- Visual --------------------------------------------------------
+        BoolParam (TEXT("bShowPrototypeMeshes"),   TEXT("Visual"),   &FOctoTuning::bShowPrototypeMeshes),
+
         // ---- Camera --------------------------------------------------------
         FloatParam(TEXT("CameraDistanceX"),        TEXT("Camera"),   &FOctoTuning::CameraDistanceX,       500.f, 5000.f, 50.f),
         FloatParam(TEXT("CameraHeightOffset"),     TEXT("Camera"),   &FOctoTuning::CameraHeightOffset,   -500.f, 1000.f, 25.f),

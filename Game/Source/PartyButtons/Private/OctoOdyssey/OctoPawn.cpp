@@ -4,6 +4,8 @@
 #include "Components/SphereComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/PoseableMeshComponent.h"
+#include "Engine/SkeletalMesh.h"
 #include "PhysicsEngine/BodyInstance.h"
 #include "PhysicalMaterials/PhysicalMaterial.h"
 #include "Materials/MaterialInterface.h"
@@ -43,6 +45,19 @@ AOctoPawn::AOctoPawn()
     UStaticMesh* SphereMesh          = SphereMeshFinder.Object;
     UStaticMesh* CylinderMesh        = CylinderMeshFinder.Object;
     UMaterialInterface* BasicMaterial = BasicMaterialFinder.Object;
+
+    // ---- SK_Okto: the shipping visual ------------------------------------
+    static ConstructorHelpers::FObjectFinder<USkeletalMesh> OctoMeshFinder(TEXT("/Game/OctoOdyssey/SK_Okto.SK_Okto"));
+
+    OctoMesh = CreateDefaultSubobject<UPoseableMeshComponent>(TEXT("OctoMesh"));
+    OctoMesh->SetupAttachment(RootComponent);
+    if (OctoMeshFinder.Object)
+    {
+        OctoMesh->SetSkinnedAssetAndUpdate(OctoMeshFinder.Object);
+    }
+    OctoMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    OctoMesh->BodyInstance.bAutoWeld = false; // as with every visual here — NoCollision alone doesn't stop autoweld
+    OctoMesh->SetCastShadow(false);
 
     // ---- Body visual (NoCollision — BodySphere handles all collision) ----
     BodyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BodyMesh"));
@@ -151,6 +166,19 @@ void AOctoPawn::RebuildGeometry()
     // refresh and nothing to mark dirty.
     BodySphere->InitSphereRadius(R);
 
+    if (OctoMesh)
+    {
+        // SK_Okto is authored at a ZERO arm-angle offset (Arm1 -> +Z), so the whole
+        // mesh is rolled to meet the colliders rather than the asset being re-exported
+        // whenever this value is tuned. Because every bone target is expressed along
+        // that bone's own measured rest direction, this roll is the ONLY place
+        // ArmAngleOffsetDegrees enters the skeletal path — ApplyArmMeshPose never
+        // mentions it.
+        OctoMesh->SetRelativeRotation(FRotator(0.f, 0.f, Tuning.ArmAngleOffsetDegrees));
+    }
+
+    ApplyMeshVisibility();
+
     if (BodyMesh)
     {
         // /Engine/BasicShapes/Sphere is ~100cm (1m) in diameter; scale factor == desired diameter in meters.
@@ -195,10 +223,100 @@ void AOctoPawn::RebuildGeometry()
     }
 }
 
+void AOctoPawn::ApplyMeshVisibility()
+{
+    const bool bShowPrototype = Tuning.bShowPrototypeMeshes;
+
+    if (OctoMesh)
+    {
+        OctoMesh->SetVisibility(true);
+    }
+
+    // The prototype shapes are hidden, not deleted, and TickArm keeps moving them
+    // either way: they are drawn from the same OctoArm:: offsets the colliders use,
+    // so switching them on is the direct check that SK_Okto is tracking collision.
+    if (BodyMesh)
+    {
+        BodyMesh->SetVisibility(bShowPrototype);
+    }
+    for (const TObjectPtr<UStaticMeshComponent>& Mesh : ArmMeshes)
+    {
+        if (Mesh) { Mesh->SetVisibility(bShowPrototype); }
+    }
+    for (const TObjectPtr<UStaticMeshComponent>& Mesh : HandMeshes)
+    {
+        if (Mesh) { Mesh->SetVisibility(bShowPrototype); }
+    }
+}
+
 void AOctoPawn::BeginPlay()
 {
     Super::BeginPlay();
     ConfigureBodyPhysics();
+
+    // Only now do the poseable mesh's bone arrays exist (AllocateTransformData runs
+    // on registration), so this is the earliest the rig can be measured. A failure
+    // leaves ArmBones empty, which every pose write below treats as "leave SK_Okto
+    // at its rest pose" — the octopus renders fully extended but still plays.
+    if (OctoMesh && OctoMesh->GetSkinnedAsset())
+    {
+        if (const USkeletalMesh* Skeletal = Cast<USkeletalMesh>(OctoMesh->GetSkinnedAsset()))
+        {
+            OctoSkeleton::BuildArmBones(*Skeletal, ArmBones);
+        }
+    }
+
+    if (ArmBones.IsEmpty())
+    {
+        UE_LOG(LogPartyButtons, Warning,
+            TEXT("AOctoPawn: no usable SK_Okto rig — the skeletal mesh will not follow the arms."));
+        return;
+    }
+
+    // A component's tick carries NO implicit dependency on its actor's, so without
+    // this the skeletal refresh can run before TickArms has written the frame's pose
+    // and the mesh trails the colliders by a frame — 20cm at ExtendSpeed 1200. The
+    // prototype meshes never had this problem: SetRelativeLocation applies at once.
+    OctoMesh->PrimaryComponentTick.AddPrerequisite(this, PrimaryActorTick);
+
+    // Retracted is the octopus's actual starting state; without this it would spawn
+    // at the reference pose (fully extended) for one frame.
+    for (int32 i = 0; i < OctoArm::NumArms; i++)
+    {
+        ApplyArmMeshPose(i, Arms[i].Extension);
+    }
+    OctoMesh->MarkRefreshTransformDirty();
+}
+
+void AOctoPawn::ApplyArmMeshPose(int32 ArmIndex, float Extension)
+{
+    if (!OctoMesh || !ArmBones.IsValidIndex(ArmIndex)) { return; }
+
+    const FOctoArmBones& Bones = ArmBones[ArmIndex];
+
+    TArray<FTransform>& Pose = OctoMesh->BoneSpaceTransforms;
+    if (!Pose.IsValidIndex(Bones.ChainRootIndex) || !Pose.IsValidIndex(Bones.HandIndex)) { return; }
+
+    // Where this arm's tip has to be. The SAME expression that places the hand
+    // sphere and the arm capsule's outer cap, so mesh and collider cannot drift.
+    const float TipOffset = OctoArm::HandCenterOffset(
+        Tuning.SphereRadius, Tuning.ArmRadius, Tuning.ArmHalfHeight, Extension);
+
+    // ---- Arm{N}: stretch the chain ----------------------------------------
+    //
+    // Written to the chain ROOT only. A bone's scale composes into its children, so
+    // one write moves Arm{N}_001, Arm{N}_002 and the chain tip together; scaling all
+    // three would compound to s^3 and overshoot badly.
+    const float Scale = OctoArm::ArmChainLengthScale(Bones.ChainOriginOffset, Bones.RestChainLength, TipOffset);
+    Pose[Bones.ChainRootIndex].SetScale3D(OctoArm::LengthAxisScale(Bones.LengthAxis, Scale));
+
+    // ---- Hand{N}: place it on the tip -------------------------------------
+    //
+    // The hand hangs off Root rather than off the chain, so the stretch above does
+    // not carry it — it is positioned outright. Rotation and scale are left at their
+    // reference values: the hand is a ball, and it is meant to stay the collider's size.
+    const FVector TargetCS = Bones.RestDirection * TipOffset;
+    Pose[Bones.HandIndex].SetTranslation(Bones.HandParentRestCS.InverseTransformPosition(TargetCS));
 }
 
 void AOctoPawn::ConfigureBodyPhysics()
@@ -276,6 +394,10 @@ void AOctoPawn::ApplyLiveTuning(const FOctoTuning& NewTuning)
 
     ApplyBodyPhysicsTuning();
     ApplySurfaceMaterial();
+
+    // Visibility is a render flag, not geometry — it touches no shape and no weld,
+    // so unlike RebuildGeometry it can be previewed mid-round.
+    ApplyMeshVisibility();
 }
 
 void AOctoPawn::SetPhysicsFrozen(bool bFrozen)
@@ -361,6 +483,13 @@ void AOctoPawn::TickArms(float DeltaSeconds)
     for (int32 i = 0; i < OctoArm::NumArms; i++)
     {
         TickArm(i, DeltaSeconds, FrameStartVelocity, Pushes);
+    }
+
+    // One flush for all eight arms — marking dirty per arm would re-walk the whole
+    // bone hierarchy eight times a frame for the same result.
+    if (OctoMesh && !ArmBones.IsEmpty())
+    {
+        OctoMesh->MarkRefreshTransformDirty();
     }
 
     if (Pushes.IsEmpty()) { return; }
@@ -465,6 +594,10 @@ void AOctoPawn::TickArm(int32 ArmIndex, float DeltaSeconds, const FVector& Frame
         const float HandOffset = OctoArm::HandCenterOffset(R, Ar, Ah, EAchieved);
         HandMeshes[ArmIndex]->SetRelativeLocation(ArmDir * HandOffset);
     }
+
+    // SK_Okto follows the same achieved extension. TickArms flushes the pose once
+    // all eight arms have been written.
+    ApplyArmMeshPose(ArmIndex, EAchieved);
 
     // ---- Push-off: hold the body to the arm's own extension speed ----
     //

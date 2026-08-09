@@ -57,6 +57,25 @@ float ArmMeshCenterOffset(float SphereRadius, float CapsuleRadius, float Capsule
          - 0.5f * CapsuleRadius;
 }
 
+float ArmChainLengthScale(float ChainOriginOffset, float RestChainLength, float TargetTipOffset)
+{
+    // A chain with no length can't be stretched into one — leave it alone rather
+    // than divide by zero. BuildArmBones rejects such a skeleton up front, so this
+    // is a backstop, not a supported configuration.
+    if (RestChainLength <= UE_KINDA_SMALL_NUMBER) { return 1.f; }
+
+    // Clamped at 0: a target inside the chain root would otherwise mirror the arm
+    // back through the body.
+    return FMath::Max(0.f, (TargetTipOffset - ChainOriginOffset) / RestChainLength);
+}
+
+FVector LengthAxisScale(const FVector& LengthAxis, float Scale)
+{
+    // Component-wise: 1 + |axis| * (Scale - 1). For an axis-aligned LengthAxis that
+    // is exactly (1,1,1) with Scale substituted into the one live component.
+    return FVector::OneVector + LengthAxis.GetAbs() * (Scale - 1.f);
+}
+
 FLinearColor HandColor(int32 ArmIndex, int32 ArmCount)
 {
     if (ArmCount <= 0) { return FLinearColor::White; }

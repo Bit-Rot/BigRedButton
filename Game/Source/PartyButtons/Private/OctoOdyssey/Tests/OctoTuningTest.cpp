@@ -234,7 +234,7 @@ bool FOctoTuningJsonContainsEveryParam::RunTest(const FString& Parameters)
 
     // Spot-check both kinds against the shipping defaults so a broken formatter
     // can't pass on structure alone.
-    TestTrue(TEXT("JSON carries the default ExtendSpeed"), Json.Contains(TEXT("\"ExtendSpeed\":900.0")));
+    TestTrue(TEXT("JSON carries the default ExtendSpeed"), Json.Contains(TEXT("\"ExtendSpeed\":1200.0")));
     TestTrue(TEXT("JSON carries the default bPushAtImpactPoint"), Json.Contains(TEXT("\"bPushAtImpactPoint\":true")));
     TestTrue(TEXT("JSON carries the default bSweepPhysicsBodies"), Json.Contains(TEXT("\"bSweepPhysicsBodies\":false")));
 

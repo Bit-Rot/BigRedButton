@@ -39,11 +39,11 @@ struct PARTYBUTTONS_API FOctoTuning
     // silently breaking the weld — see AOctoPawn's class comment.
 
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Geometry")
-    float SphereRadius = 50.f;
+    float SphereRadius = 40.f;
 
     /** Arm CAPSULE radius, and the hand sphere's radius. The shaft mesh is slimmer — see ArmMeshRadiusScale. */
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Geometry")
-    float ArmRadius = 12.f;
+    float ArmRadius = 20.f;
 
     /**
      * Arm cylinder MESH radius as a fraction of ArmRadius. Purely visual — the capsule
@@ -58,7 +58,17 @@ struct PARTYBUTTONS_API FOctoTuning
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Geometry")
     float ArmHalfHeight = 45.f;
 
-    /** Clamped in TickArm to OctoArm::MaxSafeExtension(SphereRadius, ArmRadius, ArmHalfHeight) as a hard safety backstop. */
+    /**
+     * Clamped in TickArm to OctoArm::MaxSafeExtension(SphereRadius, ArmRadius, ArmHalfHeight)
+     * as a hard safety backstop.
+     *
+     * At the defaults above the two coincide exactly: MaxSafeExtension(40, 20, 45) ==
+     * 2*45 - 20 == 70, so the effective hand-centre reach is SphereRadius + 70 == 110 —
+     * which is the reach SK_Okto is modelled at (PartyButtons.Octo.Skeleton.ReachMatchesTuning).
+     * Raising THIS value alone therefore does nothing but add dead range above the clamp;
+     * to lengthen the stroke, raise ArmHalfHeight with it and re-export the mesh.
+     * PartyButtons.Octo.ArmMath.ExtensionInvariantsHold fails if the two drift apart.
+     */
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Geometry")
     float ArmMaxExtension = 70.f;
 
@@ -75,15 +85,15 @@ struct PARTYBUTTONS_API FOctoTuning
     /**
      * How fast an arm extends — and therefore, under the absolute-arm model,
      * exactly how fast a planted arm throws the body away from the surface
-     * (see AOctoPawn::TickArm). Ballistic apex is ExtendSpeed^2 / (2*g): 900
-     * gives ~4.1 m, about four body diameters.
+     * (see AOctoPawn::TickArm). Ballistic apex is ExtendSpeed^2 / (2*g): 1200
+     * gives ~7.3 m, about nine body diameters.
      */
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Arms")
-    float ExtendSpeed = 900.f;
+    float ExtendSpeed = 1200.f;
 
     /** Kept in proportion to ExtendSpeed so the re-fire cadence doesn't feel sticky. */
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Arms")
-    float RetractSpeed = 700.f;
+    float RetractSpeed = 900.f;
 
     /**
      * How hard a planted arm resists the body sliding ACROSS its contact, as a
@@ -97,11 +107,11 @@ struct PARTYBUTTONS_API FOctoTuning
      * planted arm's collider is TELEPORTED each tick rather than solved, so
      * Chaos sees a moved shape carrying no shape velocity.
      *
-     * Defaults to 0 — the behaviour this project shipped with. Raise it to make
-     * arms grip.
+     * Defaults to 1 — a planted arm kills ALL tangential motion, which is what
+     * playtesting settled on. Drop it toward 0 to make push-offs slide.
      */
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Arms")
-    float ArmGripFraction = 0.f;
+    float ArmGripFraction = 1.f;
 
     /**
      * Apply the push-off impulse at the contact point (true) or at the centre of
@@ -181,6 +191,21 @@ struct PARTYBUTTONS_API FOctoTuning
 
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Surface")
     float SurfaceRestitution = 0.3f;
+
+    // ---- Visual -----------------------------------------------------------
+
+    /**
+     * Draw the original prototype shapes (body sphere, 8 arm cylinders, 8 hand
+     * spheres) alongside SK_Okto instead of hiding them.
+     *
+     * They are kept, not deleted, precisely so this toggle exists: the prototype
+     * meshes are drawn from the SAME OctoArm:: offsets the colliders use, so
+     * switching them on is the direct visual check that the skeletal mesh is
+     * tracking collision. Purely a render flag — it touches no physics, which is
+     * why (unlike the geometry above) it is live-appliable.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Visual")
+    bool bShowPrototypeMeshes = false;
 
     // ---- Camera -----------------------------------------------------------
 

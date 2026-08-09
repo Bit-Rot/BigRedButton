@@ -4,12 +4,14 @@
 #include "GameFramework/Pawn.h"
 #include "Containers/StaticArray.h"
 #include "OctoOdyssey/OctoArmMath.h"
+#include "OctoOdyssey/OctoSkeleton.h"
 #include "OctoOdyssey/OctoTuning.h"
 #include "OctoPawn.generated.h"
 
 class USphereComponent;
 class UCapsuleComponent;
 class UStaticMeshComponent;
+class UPoseableMeshComponent;
 class UPhysicalMaterial;
 
 /**
@@ -22,16 +24,27 @@ class UPhysicalMaterial;
  *
  * Component hierarchy:
  *   BodySphere (root, the ONLY simulating body)
- *     +- ArmCollider[0..7] : UCapsuleComponent   welded (autoweld) into BodySphere's rigid body
- *     +- BodyMesh          : UStaticMeshComponent  visual only, NoCollision
- *     +- ArmMesh[0..7]     : UStaticMeshComponent  visual only, NoCollision
+ *     +- ArmCollider[0..7] : UCapsuleComponent      welded (autoweld) into BodySphere's rigid body
+ *     +- OctoMesh          : UPoseableMeshComponent SK_Okto, the shipping visual
+ *     +- BodyMesh          : UStaticMeshComponent   prototype visual, hidden by default
+ *     +- ArmMesh[0..7]     : UStaticMeshComponent   prototype visual, hidden by default
+ *     +- HandMesh[0..7]    : UStaticMeshComponent   prototype visual, hidden by default
  *
- * Arm meshes attach to the ROOT, not to the arm colliders, and every visual
- * mesh disables autoweld explicitly (NoCollision alone does not stop a
- * UStaticMeshComponent from welding — see BodyInstance.bAutoWeld below).
- * This is what makes swapping to a skeletal mesh later a matter of deleting
- * 9 mesh components and adding one USkeletalMeshComponent driven from the
- * same OctoArm:: math — nothing in the collision path touches a mesh.
+ * Every visual attaches to the ROOT, not to the arm colliders, and disables
+ * autoweld explicitly (NoCollision alone does not stop a mesh component from
+ * welding — see BodyInstance.bAutoWeld below). Nothing in the collision path
+ * touches a mesh, which is what made the skeletal-mesh swap a pure addition:
+ * the 17 prototype shapes are still built and still updated, just invisible
+ * unless Tuning.bShowPrototypeMeshes turns them back on to check the skeleton
+ * against the collision it is supposed to be tracking.
+ *
+ * Skeletal posing: COLLISION IS THE SOURCE OF TRUTH. The bones follow the
+ * colliders, never the reverse. SK_Okto's reference pose is the octopus at full
+ * extension with a zero arm-angle offset, so posing an arm is two writes —
+ * a length scale on Arm{N} and a position on Hand{N} — both derived from the
+ * same OctoArm:: offsets the colliders use, and both driven by the ACHIEVED
+ * extension so the mesh can never render an arm through a wall the collider
+ * stopped at. See ApplyArmMeshPose and OctoSkeleton.h for the rig contract.
  *
  * "Arms are one unchangeable unit; no outside force may change their
  * relative position" is satisfied by construction: welded shapes are
@@ -195,6 +208,23 @@ private:
      */
     void ApplyArmColliderExtension(int32 ArmIndex, float Extension);
 
+    /**
+     * Pose SK_Okto's arm ArmIndex for the given extension: a length scale on the
+     * Arm{N} chain root (which propagates down the chain, so the two bones below it
+     * need no write of their own) and a component-space position for Hand{N}.
+     *
+     * Does NOT flush the pose — TickArms marks the component dirty once after all
+     * eight arms rather than eight times.
+     */
+    void ApplyArmMeshPose(int32 ArmIndex, float Extension);
+
+    /**
+     * Show SK_Okto, and show or hide the 17 prototype shapes per
+     * Tuning.bShowPrototypeMeshes. Visibility touches no physics, so unlike
+     * RebuildGeometry this is safe to call at any time.
+     */
+    void ApplyMeshVisibility();
+
     /** Body-local direction of arm ArmIndex (X always 0) — see OctoArm::ArmDirectionLocal. */
     FVector GetArmLocalDirection(int32 ArmIndex) const;
 
@@ -203,6 +233,16 @@ private:
 
     UPROPERTY(VisibleAnywhere, Category = "Octo")
     TObjectPtr<USphereComponent> BodySphere;
+
+    /**
+     * SK_Okto. Poseable rather than a full USkeletalMeshComponent on purpose: the
+     * octopus has no authored animation at all — every bone it moves is computed
+     * from the collision state — so an anim graph would be an empty layer to route
+     * around. UPoseableMeshComponent takes bone-space writes directly, which keeps
+     * the whole rig in C++ and unit-testable (OctoArm::ArmChainLengthScale).
+     */
+    UPROPERTY(VisibleAnywhere, Category = "Octo")
+    TObjectPtr<UPoseableMeshComponent> OctoMesh;
 
     UPROPERTY(VisibleAnywhere, Category = "Octo")
     TObjectPtr<UStaticMeshComponent> BodyMesh;
@@ -230,6 +270,14 @@ private:
     TObjectPtr<UPhysicalMaterial> SurfaceMaterial;
 
     TStaticArray<FOctoArmState, OctoArm::NumArms> Arms;
+
+    /**
+     * SK_Okto's arms as measured from its reference skeleton, resolved once in
+     * BeginPlay (the bone arrays do not exist at construction time). Empty means
+     * the mesh is missing or its rig does not match, in which case the octopus
+     * renders at its rest pose rather than crashing — see OctoSkeleton::BuildArmBones.
+     */
+    TArray<FOctoArmBones> ArmBones;
 
     /** True while the intro overlay has the round paused — see SetPhysicsFrozen. */
     bool bPhysicsFrozen = false;

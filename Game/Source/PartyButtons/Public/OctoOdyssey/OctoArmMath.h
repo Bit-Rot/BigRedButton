@@ -80,6 +80,35 @@ namespace OctoArm
     PARTYBUTTONS_API float ArmMeshCenterOffset(float SphereRadius, float CapsuleRadius, float CapsuleHalfHeight, float Extension);
 
     /**
+     * Stretch factor for a SKELETAL arm chain so its tip lands at TargetTipOffset from
+     * the body origin. The chain's root bone sits ChainOriginOffset out along the arm and
+     * spans RestChainLength in the reference pose, so the factor is simply
+     *   (TargetTipOffset - ChainOriginOffset) / RestChainLength.
+     *
+     * This is why retracting an arm is NOT a scale to zero: at Extension 0 the tip has to
+     * land on the body's own surface (TargetTipOffset == SphereRadius), and the chain root
+     * is already partway there, so the useful range is
+     * (SphereRadius - ChainOriginOffset) / RestChainLength .. 1 — for SK_Okto, 0.103..1.
+     *
+     * Callers pass HandCenterOffset(...) as TargetTipOffset, so one expression drives both
+     * the skeletal hand and the collider's outer cap.
+     *
+     * Returns 1 for a degenerate RestChainLength (never a division by zero) and never
+     * returns a negative scale, which would invert the arm through the body.
+     */
+    PARTYBUTTONS_API float ArmChainLengthScale(float ChainOriginOffset, float RestChainLength, float TargetTipOffset);
+
+    /**
+     * Scale vector that stretches by Scale along LengthAxis and leaves the other two axes
+     * at 1, so an arm bone gets longer without getting thicker.
+     *
+     * LengthAxis is a bone-local unit direction, which after an FBX import is always one
+     * of +-X/+-Y/+-Z (SK_Okto's arms come in on local -Y); the sign is irrelevant to a
+     * scale, hence the component-wise absolute value.
+     */
+    PARTYBUTTONS_API FVector LengthAxisScale(const FVector& LengthAxis, float Scale);
+
+    /**
      * Hand color for arm ArmIndex: ArmCount hues spaced equidistantly around the wheel
      * at full saturation and value, so every arm is individually identifiable at a
      * glance. ArmIndex wraps (both directions) like ArmDirectionLocal.
