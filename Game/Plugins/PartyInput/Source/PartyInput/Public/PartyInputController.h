@@ -34,6 +34,17 @@ DECLARE_MULTICAST_DELEGATE(FOnPartyMainButton);
 DECLARE_MULTICAST_DELEGATE(FOnPartyDevKey);
 
 /**
+ * One gamepad key bound to one player-button index. Sparse by nature — a
+ * gamepad has nowhere near 16 buttons, so only some indices are covered.
+ * See APartyInputController::GetGamepadFaceButtonMappings.
+ */
+struct FPartyGamepadMapping
+{
+    int32 ButtonIndex = INDEX_NONE;
+    FKey  Key;
+};
+
+/**
  * APartyInputController
  *
  * Fans 16 physical USB HID buttons through Unreal Enhanced Input to a single
@@ -84,6 +95,24 @@ public:
     /** Broadcast when the dev-only "decrement" key (Down arrow) is pressed. See bEnableDevControls. */
     FOnPartyDevKey OnDevDecrement;
 
+    /** Broadcast when the dev-only "left" key (Left arrow) is pressed. See bEnableDevControls. */
+    FOnPartyDevKey OnDevLeft;
+
+    /** Broadcast when the dev-only "right" key (Right arrow) is pressed. See bEnableDevControls. */
+    FOnPartyDevKey OnDevRight;
+
+    /**
+     * Broadcast when the dev menu key (Tab) is pressed. Like the nudge keys, this
+     * plugin only knows "the dev menu key happened" — what it opens is up to the
+     * game layer (see APartyGameModeBase::OnDevMenuToggle).
+     *
+     * The Tab key mapping and the input binding are both compiled out of a
+     * Shipping build, so this delegate can never fire there: a developer tuning
+     * menu must not be reachable on a cabinet in the wild, and a runtime flag
+     * someone can flip is a weaker guarantee than code that isn't there.
+     */
+    FOnPartyDevKey OnDevMenu;
+
     /**
      * Pure, world-free classification rule: held if HeldSeconds >= Threshold.
      * Unit-testable without a controller instance.
@@ -126,6 +155,30 @@ public:
      */
     static const TArray<FKey>& GetKeyboardEmulationKeys();
 
+    /**
+     * The four gamepad face buttons, mapped to the player buttons that sit in the
+     * matching compass direction on screen.
+     *
+     * The layout is OctoOdyssey's: its eight arms are evenly spaced around the
+     * body in the Y-Z play plane, at angles offset + 45*i measured from +Z, with
+     * arm direction (0, sin, cos) — and the camera is unrotated, so +Z is screen
+     * up and +Y is screen right. That puts arms 0/2/4/6 at north/east/south/west,
+     * which is exactly the face buttons' arrangement:
+     *
+     *     Top    (Y / triangle)  -> button 0  (north)
+     *     Right  (B / circle)    -> button 2  (east)
+     *     Bottom (A / cross)     -> button 4  (south)
+     *     Left   (X / square)    -> button 6  (west)
+     *
+     * The ordering survives retuning ArmAngleOffsetDegrees: rotating the whole
+     * arm ring turns all four together, so 0/2/4/6 stay 90 degrees apart in the
+     * same rotational order and the compass assignment stays consistent.
+     *
+     * Static so it can be called without a controller instance (tests, HUDs) —
+     * same contract as GetKeyboardEmulationKeys.
+     */
+    static const TArray<FPartyGamepadMapping>& GetGamepadFaceButtonMappings();
+
 protected:
     /**
      * When true (default), BuildButtonInputs also maps the keyboard emulation
@@ -134,6 +187,16 @@ protected:
      */
     UPROPERTY(EditDefaultsOnly, Category = "PartyInput")
     bool bEnableKeyboardEmulation = true;
+
+    /**
+     * When true (default), BuildButtonInputs also maps the four gamepad face
+     * buttons to the player buttons in the matching screen direction (see
+     * GetGamepadFaceButtonMappings). A separate flag from the keyboard scheme
+     * because it is a genuinely different input device, not a key layout — and
+     * because a gamepad plugged in alongside the cabinet should be an opt-out.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "PartyInput")
+    bool bEnableGamepadEmulation = true;
 
     /**
      * How long the main button must be held (in seconds) to fire OnMainButtonHeld
@@ -185,6 +248,23 @@ protected:
     UPROPERTY(EditDefaultsOnly, Category = "PartyInput")
     TObjectPtr<UInputAction> DevDecrementAction;
 
+    /** Generic dev-only "left" action, mapped only to the Left arrow key. See bEnableDevControls. */
+    UPROPERTY(EditDefaultsOnly, Category = "PartyInput")
+    TObjectPtr<UInputAction> DevLeftAction;
+
+    /** Generic dev-only "right" action, mapped only to the Right arrow key. See bEnableDevControls. */
+    UPROPERTY(EditDefaultsOnly, Category = "PartyInput")
+    TObjectPtr<UInputAction> DevRightAction;
+
+    /**
+     * Dev menu action. Mapped to Tab and bound only in non-Shipping builds — the
+     * property itself can't be wrapped in #if (UHT rejects a UPROPERTY inside a
+     * preprocessor block), so in Shipping this is simply an action that nothing
+     * ever maps a key to and nothing ever binds a handler to.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "PartyInput")
+    TObjectPtr<UInputAction> DevMenuAction;
+
     /** Bound to all 16 actions' ETriggerEvent::Started. Resolves which action fired. */
     void OnAnyButton(const FInputActionInstance& Instance);
 
@@ -198,9 +278,14 @@ protected:
     /** Fires at MainButtonHoldThreshold while the main button is still held. */
     void OnMainHoldTimerFired();
 
-    /** Bound to DevIncrementAction/DevDecrementAction Started. A press is a single nudge — no hold semantics. */
+    /** Bound to the Dev*Action Started events. A press is a single nudge — no hold semantics. */
     void OnDevIncrementStarted(const FInputActionInstance& Instance);
     void OnDevDecrementStarted(const FInputActionInstance& Instance);
+    void OnDevLeftStarted(const FInputActionInstance& Instance);
+    void OnDevRightStarted(const FInputActionInstance& Instance);
+#if !UE_BUILD_SHIPPING
+    void OnDevMenuStarted(const FInputActionInstance& Instance);
+#endif
 
     /**
      * ===== HANDOFF POINT =====
@@ -214,9 +299,14 @@ protected:
     virtual void HandleMainButtonTapped();
     virtual void HandleMainButtonHeld();
 
-    /** Override or bind OnDevIncrement / OnDevDecrement to react. */
+    /** Override or bind OnDevIncrement / OnDevDecrement / OnDevLeft / OnDevRight / OnDevMenu to react. */
     virtual void HandleDevIncrement();
     virtual void HandleDevDecrement();
+    virtual void HandleDevLeft();
+    virtual void HandleDevRight();
+#if !UE_BUILD_SHIPPING
+    virtual void HandleDevMenu();
+#endif
 
 private:
     static constexpr int32 NUM_BUTTONS = 16;

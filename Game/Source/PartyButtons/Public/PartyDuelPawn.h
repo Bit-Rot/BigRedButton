@@ -65,10 +65,10 @@ public:
     /** Collision sphere radius in Unreal units (cm), e.g. for AI ricochet/impact math. */
     float GetSphereRadiusUnits() const { return SphereRadiusMeters * 100.f; }
 
-    /** Forwarded from APartyArenaGameMode::OnPlayerButton. */
+    /** Forwarded from APartyArenaGameMode::OnGameplayButton. */
     void NotifyPressed();
 
-    /** Forwarded from APartyArenaGameMode::OnPlayerButtonReleased. */
+    /** Forwarded from APartyArenaGameMode::OnGameplayButtonReleased. */
     void NotifyReleased();
 
     /**

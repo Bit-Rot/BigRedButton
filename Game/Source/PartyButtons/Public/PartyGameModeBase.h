@@ -95,6 +95,39 @@ public:
      */
     virtual TArray<FPartyPawnMarker> GetPawnMarkers() const { return {}; }
 
+    // ---- Optional dev tuning menu (Tab) ---------------------------------------
+    //
+    // A GameMode opts in by returning true from GetDevMenuOpen and supplying rows.
+    // APartyFlowHUD draws whatever rows it is given over the top of the current
+    // phase and routes mouse clicks back through the setters below — it never
+    // learns what any row means. See AOctoGameMode for the reference
+    // implementation (tuning FOctoTuning live).
+    //
+    // Dev-only by construction: the only thing that can open the menu is
+    // OnDevMenuToggle, and its input action is compiled out of Shipping (see
+    // APartyInputController::OnDevMenu).
+
+    /** True while the dev menu should be drawn. Default false = this GameMode has no dev menu. */
+    virtual bool GetDevMenuOpen() const { return false; }
+
+    /** The rows to draw, top to bottom. Only consulted while GetDevMenuOpen(). */
+    virtual TArray<FPartyDevMenuRow> GetDevMenuRows() const { return {}; }
+
+    /** Index into GetDevMenuRows of the highlighted row, or INDEX_NONE. */
+    virtual int32 GetDevMenuSelection() const { return INDEX_NONE; }
+
+    /** Heading drawn at the top of the dialog. */
+    virtual FString GetDevMenuTitle() const { return TEXT("DEV TUNING"); }
+
+    /** Mouse clicked a row — move the selection there. */
+    virtual void SetDevMenuSelection(int32 RowIndex) {}
+
+    /** Mouse dragged a row's slider to Alpha (0..1). */
+    virtual void SetDevMenuRowNormalized(int32 RowIndex, float Alpha) {}
+
+    /** Mouse clicked an action row (bIsAction) — e.g. Accept or Cancel. */
+    virtual void ActivateDevMenuRow(int32 RowIndex) {}
+
 protected:
     // ---- Phase handler virtuals (subclasses override what they care about) ----
 
@@ -117,6 +150,20 @@ protected:
      */
     virtual void OnDevIncrement() {}
     virtual void OnDevDecrement() {}
+
+    /**
+     * Called when the dev-only Left/Right arrow keys are pressed. Empty default —
+     * paired with Up/Down these give the dev menu its four-way navigation
+     * (Up/Down select a row, Left/Right change its value).
+     */
+    virtual void OnDevLeft() {}
+    virtual void OnDevRight() {}
+
+    /**
+     * Called when the dev menu key (Tab) is pressed. Empty default — a GameMode
+     * that has no dev menu simply ignores it. Never fires in a Shipping build.
+     */
+    virtual void OnDevMenuToggle() {}
 
     // ---- Travel helpers -------------------------------------------------------
 
@@ -147,6 +194,9 @@ private:
     void HandleMainHoldDelegate()                              { OnMainHold(); }
     void HandleDevIncrementDelegate()                          { OnDevIncrement(); }
     void HandleDevDecrementDelegate()                          { OnDevDecrement(); }
+    void HandleDevLeftDelegate()                               { OnDevLeft(); }
+    void HandleDevRightDelegate()                              { OnDevRight(); }
+    void HandleDevMenuDelegate()                               { OnDevMenuToggle(); }
 
     // Stored so we can remove bindings if needed.
     APartyInputController* BoundController = nullptr;

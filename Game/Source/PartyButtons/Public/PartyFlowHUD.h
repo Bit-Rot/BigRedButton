@@ -53,6 +53,18 @@ private:
     void DrawPawnMarkers(APartyGameModeBase* GM);
 
     /**
+     * Dev tuning menu (Tab). Drawn OVER whatever phase is active, from the rows
+     * the GameMode supplies (APartyGameModeBase::GetDevMenuRows) — this HUD never
+     * learns what any row means, which is what keeps it free of concrete GameMode
+     * headers.
+     *
+     * Also owns the mouse: DrawHUD is the only per-frame place that knows the row
+     * layout, so hit-testing lives here rather than being duplicated in the
+     * GameMode. Clicks and drags are routed back through the GameMode's setters.
+     */
+    void DrawDevMenu(APartyGameModeBase* GM);
+
+    /**
      * Draw the 4×4 grid of tiles.
      * IsLit(i) controls the cell background color (human/joined — green).
      * IsAI(i) controls the AI-filled color (dev-only testing aid — blue).
@@ -71,6 +83,23 @@ private:
 
     // Tracks last phase that was logged so we only log on phase transitions.
     mutable EPartyPhase LastLoggedPhase = EPartyPhase::Main;
+
+    // ---- Dev menu mouse state ------------------------------------------
+
+    /** Row whose slider the mouse grabbed, held until the button comes back up. */
+    int32 DevMenuDragRow = INDEX_NONE;
+
+    /** Previous frame's left-button state, so a click fires once instead of every frame. */
+    bool  bDevMenuMouseWasDown = false;
+
+    // ---- Dev menu layout ------------------------------------------------
+
+    static constexpr float DEV_ROW_HEIGHT   = 22.f;
+    static constexpr float DEV_PANEL_PAD    = 16.f;
+    static constexpr float DEV_HEADER_SPACE = 64.f;  // title + hint above the first row
+    static constexpr float DEV_FOOTER_SPACE = 26.f;  // scroll indicator below the last row
+    static constexpr float DEV_LABEL_WIDTH  = 250.f;
+    static constexpr float DEV_VALUE_WIDTH  = 80.f;
 
     // ---- Shared grid constants (match APartyButtonsHUD) ----------------
 

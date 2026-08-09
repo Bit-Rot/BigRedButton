@@ -7,6 +7,8 @@
 #include "Engine/Canvas.h"
 #include "Engine/World.h"
 #include "Engine/Engine.h"
+#include "GameFramework/PlayerController.h"
+#include "InputCoreTypes.h"
 
 // ---- Private helpers -------------------------------------------------------
 
@@ -76,6 +78,13 @@ void APartyFlowHUD::DrawHUD()
 
     default:
         break;
+    }
+
+    // Last, and outside the switch: the dev menu overlays whatever phase is
+    // running rather than replacing it.
+    if (GM && GM->GetDevMenuOpen())
+    {
+        DrawDevMenu(GM);
     }
 }
 
@@ -299,6 +308,164 @@ void APartyFlowHUD::DrawPawnMarkers(APartyGameModeBase* GM)
 
         DrawText(Label, Color, X, Y, Font, LabelScale);
     }
+}
+
+// ---- Dev tuning menu -------------------------------------------------------
+
+void APartyFlowHUD::DrawDevMenu(APartyGameModeBase* GM)
+{
+    if (!Canvas || !GM) { return; }
+
+    const TArray<FPartyDevMenuRow> Rows = GM->GetDevMenuRows();
+    if (Rows.IsEmpty()) { return; }
+
+    const int32 Selection = GM->GetDevMenuSelection();
+
+    // ---- Layout ----------------------------------------------------------
+    //
+    // The row list is taller than most screens, so it scrolls: only VisibleRows
+    // are drawn, windowed around the selection. Everything below derives from
+    // these two numbers, and the mouse hit-test reuses them, so the drawn
+    // rectangle and the clickable rectangle can never disagree.
+
+    const float PanelW = FMath::Min(Canvas->SizeX * 0.55f, 640.f);
+    const float MaxPanelH = Canvas->SizeY * 0.9f;
+    const float ChromeH = DEV_HEADER_SPACE + DEV_FOOTER_SPACE + DEV_PANEL_PAD * 2.f;
+
+    const int32 MaxVisible = FMath::Max(1, FMath::FloorToInt((MaxPanelH - ChromeH) / DEV_ROW_HEIGHT));
+    const int32 VisibleRows = FMath::Min(Rows.Num(), MaxVisible);
+
+    // Window the list so the selection stays on screen, clamped at both ends.
+    int32 FirstRow = FMath::Clamp(Selection - VisibleRows / 2, 0, FMath::Max(0, Rows.Num() - VisibleRows));
+
+    const float PanelH = VisibleRows * DEV_ROW_HEIGHT + ChromeH;
+    const float PanelX = (Canvas->SizeX - PanelW) * 0.5f;
+    const float PanelY = (Canvas->SizeY - PanelH) * 0.5f;
+
+    // ---- Panel -----------------------------------------------------------
+
+    DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.45f), 0.f, 0.f, Canvas->SizeX, Canvas->SizeY);
+    DrawRect(FLinearColor(0.05f, 0.05f, 0.10f, 0.95f), PanelX, PanelY, PanelW, PanelH);
+
+    const FLinearColor Border(0.85f, 0.75f, 0.15f, 1.f);
+    DrawLine(PanelX,          PanelY,          PanelX + PanelW, PanelY,          Border);
+    DrawLine(PanelX + PanelW, PanelY,          PanelX + PanelW, PanelY + PanelH, Border);
+    DrawLine(PanelX + PanelW, PanelY + PanelH, PanelX,          PanelY + PanelH, Border);
+    DrawLine(PanelX,          PanelY + PanelH, PanelX,          PanelY,          Border);
+
+    DrawCenteredText(GM->GetDevMenuTitle(), PanelY + 10.f, FLinearColor(1.f, 0.9f, 0.1f, 1.f), 1.6f);
+    DrawCenteredText(TEXT("Up/Down: select   Left/Right: change   Mouse: drag   Tab: close"),
+                     PanelY + 40.f, FLinearColor(0.6f, 0.6f, 0.6f, 1.f));
+
+    // ---- Mouse -----------------------------------------------------------
+    //
+    // Read once, before the rows, so press/release edges are evaluated against a
+    // single consistent sample for the whole frame.
+    APlayerController* PC = GetOwningPlayerController();
+    float MouseX = 0.f, MouseY = 0.f;
+    const bool bHasMouse  = PC && PC->GetMousePosition(MouseX, MouseY);
+    const bool bMouseDown = PC && PC->IsInputKeyDown(EKeys::LeftMouseButton);
+    const bool bJustPressed = bMouseDown && !bDevMenuMouseWasDown;
+
+    if (!bMouseDown)
+    {
+        DevMenuDragRow = INDEX_NONE;
+    }
+
+    const float RowsX     = PanelX + DEV_PANEL_PAD;
+    const float RowsW     = PanelW - DEV_PANEL_PAD * 2.f;
+    const float RowsTop   = PanelY + DEV_PANEL_PAD + DEV_HEADER_SPACE;
+    const float SliderX   = RowsX + DEV_LABEL_WIDTH;
+    const float SliderW   = FMath::Max(40.f, RowsW - DEV_LABEL_WIDTH - DEV_VALUE_WIDTH);
+
+    // ---- Rows ------------------------------------------------------------
+
+    for (int32 Visible = 0; Visible < VisibleRows; Visible++)
+    {
+        const int32 RowIndex = FirstRow + Visible;
+        if (!Rows.IsValidIndex(RowIndex)) { break; }
+
+        const FPartyDevMenuRow& Row = Rows[RowIndex];
+        const float RowY = RowsTop + Visible * DEV_ROW_HEIGHT;
+        const bool  bSelected = (RowIndex == Selection);
+
+        if (bSelected)
+        {
+            DrawRect(FLinearColor(1.0f, 0.55f, 0.0f, 0.30f), RowsX - 4.f, RowY - 2.f, RowsW + 8.f, DEV_ROW_HEIGHT);
+        }
+
+        if (Row.bIsHeader)
+        {
+            DrawText(Row.Label, FLinearColor(0.5f, 0.8f, 1.f, 1.f), RowsX, RowY, nullptr, 1.1f);
+            continue;
+        }
+
+        const FLinearColor LabelColor = Row.bIsAction
+            ? FLinearColor(0.4f, 1.0f, 0.5f, 1.f)
+            : FLinearColor(0.9f, 0.9f, 0.9f, 1.f);
+        DrawText(Row.Label, LabelColor, RowsX, RowY);
+
+        if (!Row.Note.IsEmpty())
+        {
+            // Dim, and hung off the right of the label column so it can't be
+            // mistaken for part of the name.
+            DrawText(Row.Note, FLinearColor(0.45f, 0.45f, 0.45f, 1.f), RowsX + DEV_LABEL_WIDTH - 62.f, RowY);
+        }
+
+        if (Row.Normalized >= 0.f)
+        {
+            const float TrackY = RowY + 6.f;
+            const float TrackH = 8.f;
+            DrawRect(FLinearColor(0.15f, 0.15f, 0.18f, 1.f), SliderX, TrackY, SliderW, TrackH);
+            DrawRect(FLinearColor(0.30f, 0.75f, 0.95f, 1.f), SliderX, TrackY, SliderW * Row.Normalized, TrackH);
+
+            DrawText(Row.ValueText, FLinearColor::White, SliderX + SliderW + 8.f, RowY);
+        }
+
+        // ---- Hit-testing (same rectangles that were just drawn) ----------
+
+        if (!bHasMouse) { continue; }
+
+        const bool bOverRow = (MouseY >= RowY - 2.f) && (MouseY < RowY - 2.f + DEV_ROW_HEIGHT)
+                           && (MouseX >= RowsX - 4.f) && (MouseX < RowsX - 4.f + RowsW + 8.f);
+
+        if (bJustPressed && bOverRow)
+        {
+            if (Row.bIsAction)
+            {
+                // Fires Accept/Cancel. Anything after this may be operating on a
+                // torn-down world (Accept reloads the course), so stop here.
+                GM->ActivateDevMenuRow(RowIndex);
+                bDevMenuMouseWasDown = bMouseDown;
+                return;
+            }
+
+            GM->SetDevMenuSelection(RowIndex);
+            if (Row.Normalized >= 0.f && MouseX >= SliderX)
+            {
+                DevMenuDragRow = RowIndex;
+            }
+        }
+
+        // Continuous drag: the grabbed row keeps tracking the cursor even once
+        // it leaves the row's vertical band, which is what makes a slider feel
+        // like a slider rather than a series of clicks.
+        if (bMouseDown && DevMenuDragRow == RowIndex && SliderW > 0.f)
+        {
+            GM->SetDevMenuRowNormalized(RowIndex, (MouseX - SliderX) / SliderW);
+        }
+    }
+
+    // ---- Scroll indicator ------------------------------------------------
+
+    if (Rows.Num() > VisibleRows)
+    {
+        const FString Scroll = FString::Printf(TEXT("%d-%d of %d"),
+            FirstRow + 1, FirstRow + VisibleRows, Rows.Num());
+        DrawCenteredText(Scroll, PanelY + PanelH - DEV_FOOTER_SPACE, FLinearColor(0.5f, 0.5f, 0.5f, 1.f));
+    }
+
+    bDevMenuMouseWasDown = bMouseDown;
 }
 
 void APartyFlowHUD::DrawResults(const FPartySessionState& State)

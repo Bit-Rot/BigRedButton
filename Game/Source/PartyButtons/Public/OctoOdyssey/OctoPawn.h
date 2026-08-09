@@ -4,11 +4,13 @@
 #include "GameFramework/Pawn.h"
 #include "Containers/StaticArray.h"
 #include "OctoOdyssey/OctoArmMath.h"
+#include "OctoOdyssey/OctoTuning.h"
 #include "OctoPawn.generated.h"
 
 class USphereComponent;
 class UCapsuleComponent;
 class UStaticMeshComponent;
+class UPhysicalMaterial;
 
 /**
  * AOctoPawn
@@ -47,11 +49,38 @@ class UStaticMeshComponent;
  * frame-rate-dependent pushout — unusable as a launch source). So the two
  * jobs are split: ApplyArmColliderExtension moves REAL collision geometry
  * (for propping/blocking/rolling — see TickArm's swept clamp, which never
- * lets the collider teleport into penetration), while TickArm fires an
- * explicit impulse on the free->blocked transition (for launching — see
- * ArmLaunchImpulse). ApplyArmColliderExtension is the one function to swap
- * if the collider-move mechanism itself ever needs to change (e.g. to the
- * FPhysicsInterface::SetLocalTransform fallback noted in its comment).
+ * lets the collider teleport into penetration), while TickArm applies an
+ * explicit push-off for launching. ApplyArmColliderExtension is the one
+ * function to swap if the collider-move mechanism itself ever needs to change
+ * (e.g. to the FPhysicsInterface::SetLocalTransform fallback noted in its
+ * comment).
+ *
+ * The arms are ABSOLUTE: no external force may slow an extending arm down, so
+ * a planted arm extending at ExtendSpeed throws the body away from the contact
+ * at exactly ExtendSpeed. TickArm implements that as a velocity FLOOR rather
+ * than a force — how high the octopus flies is set by how fast its arms move,
+ * not by how hard they push, and not by how heavy it is. This deliberately
+ * replaced an earlier force/impulse model whose numbers could not beat gravity
+ * (two planted arms managed 900 cm/s^2 against gravity's 980) and in which
+ * ExtendSpeed had no effect on launch power at all.
+ *
+ * Tuning: every number this class uses lives in FOctoTuning (OctoTuning.h), not
+ * in per-property members here. Values split into two groups by WHEN they can be
+ * applied:
+ *
+ *   Geometry (radii, half-height, angles) is baked into the components by
+ *   RebuildGeometry, which must run BEFORE the physics state is created —
+ *   i.e. from the constructor or from OnConstruction, never later. Resizing a
+ *   shape after it has welded into BodySphere's shape union risks silently
+ *   breaking the weld, and a broken weld means the arms stop colliding at all
+ *   with no visible symptom. OnConstruction is the window the dev tuning menu
+ *   uses: AActor::PostSpawnInitialize runs ExecuteConstruction before
+ *   PostActorConstruction registers the components, so applying tuning there is
+ *   exactly equivalent to having edited FOctoTuning's defaults.
+ *
+ *   Everything else (mass, damping, clamps, surface, arm speeds, grip) goes
+ *   through ApplyLiveTuning and can change mid-round, which is what lets the
+ *   menu preview a value while you are actually playing.
  */
 UCLASS()
 class PARTYBUTTONS_API AOctoPawn : public APawn
@@ -61,86 +90,99 @@ class PARTYBUTTONS_API AOctoPawn : public APawn
 public:
     AOctoPawn();
 
-    /** Forwarded from AOctoGameMode::OnPlayerButton. */
+    /** Forwarded from AOctoGameMode::OnGameplayButton. */
     void NotifyArmPressed(int32 ArmIndex);
 
-    /** Forwarded from AOctoGameMode::OnPlayerButtonReleased. */
+    /** Forwarded from AOctoGameMode::OnGameplayButtonReleased. */
     void NotifyArmReleased(int32 ArmIndex);
+
+    /**
+     * Park/release the octopus for the intro overlay (see
+     * APartyMinigameGameMode::SetGameplayFrozen). Suspending the actor's TICK
+     * would not be enough — that stops the arms but leaves the body falling
+     * under gravity — so this switches gravity off and zeroes its velocities
+     * instead. See the implementation for why it deliberately avoids
+     * SetSimulatePhysics.
+     */
+    void SetPhysicsFrozen(bool bFrozen);
+
+    /**
+     * Re-apply everything that can change without rebuilding the body: mass,
+     * damping, CCD, depenetration cap and the surface material. Geometry fields
+     * in NewTuning are stored but NOT applied — see the class comment for why
+     * they can only be baked in before the physics state exists.
+     *
+     * Called by the dev tuning menu on every value change, so the octopus can be
+     * felt out mid-round.
+     */
+    void ApplyLiveTuning(const FOctoTuning& NewTuning);
+
+    /** The values this pawn was built with. Read-only outside ApplyLiveTuning. */
+    const FOctoTuning& GetTuning() const { return Tuning; }
 
 protected:
     virtual void BeginPlay() override;
     virtual void Tick(float DeltaSeconds) override;
 
-    // ---- Geometry tunables (baked into components at construction — see
-    // PartyArena's class comment for why this codebase tunes these by
-    // editing the C++ default rather than via a Blueprint class-defaults
-    // override) ----
+    /**
+     * Pulls the live tuning from UOctoTuningSubsystem (if there is one) and bakes
+     * its geometry into the components. Runs before component registration, which
+     * is the only safe window for that — see the class comment.
+     */
+    virtual void OnConstruction(const FTransform& Transform) override;
 
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Geometry")
-    float SphereRadius = 50.f;
-
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Geometry")
-    float ArmRadius = 12.f;
-
-    /** UE capsule half-height INCLUDES the hemisphere caps (total capsule length = 2*ArmHalfHeight). */
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Geometry")
-    float ArmHalfHeight = 30.f;
-
-    /** Clamped in TickArm to OctoArm::MaxSafeExtension(SphereRadius, ArmRadius, ArmHalfHeight) as a hard safety backstop. */
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Geometry")
-    float ArmMaxExtension = 45.f;
-
-    /** Angle of arm 0 from +Z; arm i sits at AngleOffset + 360*i/8. 22.5 keeps no arm pointing straight down. */
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Geometry")
-    float ArmAngleOffsetDegrees = 22.5f;
-
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Geometry")
-    float ExtendSpeed = 450.f;
-
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Geometry")
-    float RetractSpeed = 300.f;
-
-    /** Shrinks the swept collision test so an arm already resting on a surface doesn't self-trigger. */
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Geometry")
-    float ArmSweepSkin = 1.f;
-
-    // ---- Physics tunables ----
-
-    /** Fixed mass regardless of arm extension — every arm move triggers UpdateMassProperties; without this override total mass would breathe and impulse tuning would drift. */
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Physics")
-    float BodyMassKg = 40.f;
-
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Physics")
-    float LinearDamping = 0.2f;
-
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Physics")
-    float AngularDamping = 0.5f;
-
-    /** Impulse (kg*cm/s) applied once on a fully-blocked arm's free->blocked transition. */
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Physics")
-    float ArmLaunchImpulse = 9000.f;
-
-    /** Sustained force (kg*cm/s^2) applied while an arm stays blocked and still trying to extend — lets two "planted" arms lift the body. */
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Physics")
-    float ArmSustainForce = 18000.f;
-
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Physics")
-    float MaxLaunchSpeed = 1400.f;
-
-    /** Per-body backstop in case the swept clamp is ever bypassed. */
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Physics")
-    float MaxDepenetrationVelocity = 150.f;
+    /**
+     * Every tunable this pawn uses. Defaults come from FOctoTuning's member
+     * initialisers; OnConstruction overwrites the whole struct from the tuning
+     * subsystem when one exists.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo")
+    FOctoTuning Tuning;
 
 private:
     struct FOctoArmState
     {
-        bool  bPressed         = false;
-        float Extension        = 0.f;
-        bool  bBlockedLastTick = false;
+        bool  bPressed  = false;
+        float Extension = 0.f;
+    };
+
+    /** One arm's push-off for this frame, applied by TickArms after every arm has been stepped. */
+    struct FPendingPush
+    {
+        FVector Impulse;
+        FVector Location;
     };
 
     void TickArms(float DeltaSeconds);
-    void TickArm(int32 ArmIndex, float DeltaSeconds);
+
+    /**
+     * Steps one arm and, if it is planted against something, appends this
+     * frame's push-off to OutPushes. Never touches the body's velocity itself —
+     * see TickArms for why every arm's push must be computed against the same
+     * frame-start velocity.
+     */
+    void TickArm(int32 ArmIndex, float DeltaSeconds, const FVector& FrameStartVelocity, TArray<FPendingPush>& OutPushes);
+
+    /** One-time BeginPlay setup: the DOF lock, then everything ApplyLiveTuning also does. */
+    void ConfigureBodyPhysics();
+
+    /** Mass override, damping, CCD and depenetration cap — the re-appliable subset. */
+    void ApplyBodyPhysicsTuning();
+
+    /**
+     * Size and place every component from Tuning's geometry fields. Called from
+     * the constructor and again from OnConstruction — and from NOWHERE else, for
+     * the weld reason in the class comment.
+     */
+    void RebuildGeometry();
+
+    /**
+     * Build (or update) the transient UPhysicalMaterial from Tuning's surface
+     * fields and push it onto the body and every arm collider. No-op when
+     * bOverridePhysicalMaterial is false, which leaves the Chaos defaults in
+     * place — the behaviour before surface tuning existed.
+     */
+    void ApplySurfaceMaterial();
 
     /**
      * Moves ArmColliders[ArmIndex] to the pose for the given Extension (a
@@ -171,5 +213,24 @@ private:
     UPROPERTY(VisibleAnywhere, Category = "Octo")
     TArray<TObjectPtr<UStaticMeshComponent>> ArmMeshes;
 
+    /**
+     * "Hands" — a ball at each arm's tip, radius ArmRadius, drawn coincident with the
+     * arm capsule's outer cap so its visible surface is exactly the collider's tip
+     * surface. One distinct hue per arm (OctoArm::HandColor).
+     */
+    UPROPERTY(VisibleAnywhere, Category = "Octo")
+    TArray<TObjectPtr<UStaticMeshComponent>> HandMeshes;
+
+    /**
+     * Transient material carrying Tuning's friction/restitution, shared by the
+     * body sphere and all 8 arm colliders. Created on first use — the project
+     * ships no UPhysicalMaterial assets, so there is nothing to load.
+     */
+    UPROPERTY(Transient)
+    TObjectPtr<UPhysicalMaterial> SurfaceMaterial;
+
     TStaticArray<FOctoArmState, OctoArm::NumArms> Arms;
+
+    /** True while the intro overlay has the round paused — see SetPhysicsFrozen. */
+    bool bPhysicsFrozen = false;
 };

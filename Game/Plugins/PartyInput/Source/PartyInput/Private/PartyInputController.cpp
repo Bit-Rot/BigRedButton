@@ -26,14 +26,31 @@
     return Keys;
 }
 
+// ---- Gamepad face-button table --------------------------------------------
+
+/*static*/ const TArray<FPartyGamepadMapping>& APartyInputController::GetGamepadFaceButtonMappings()
+{
+    // Compass order — see the header for why these indices and not others.
+    static const TArray<FPartyGamepadMapping> Mappings = {
+        { 0, EKeys::Gamepad_FaceButton_Top    }, // north (Y / triangle)
+        { 2, EKeys::Gamepad_FaceButton_Right  }, // east  (B / circle)
+        { 4, EKeys::Gamepad_FaceButton_Bottom }, // south (A / cross)
+        { 6, EKeys::Gamepad_FaceButton_Left   }, // west  (X / square)
+    };
+    return Mappings;
+}
+
 // ---- Runtime input builder ------------------------------------------------
 
 void APartyInputController::BuildButtonInputs()
 {
     // Skip if already fully populated (e.g., by designer-assigned asset properties).
     // Main button + dev actions are included in the skip guard: if all are set, skip entirely.
+    // DevMenuAction is deliberately absent from the guard — it doesn't exist in
+    // Shipping, and gating the whole build on it would change behaviour by config.
     if (ButtonActions.Num() == NUM_BUTTONS && ButtonMappingContext != nullptr && MainButtonAction != nullptr
-        && DevIncrementAction != nullptr && DevDecrementAction != nullptr)
+        && DevIncrementAction != nullptr && DevDecrementAction != nullptr
+        && DevLeftAction != nullptr && DevRightAction != nullptr)
     {
         return;
     }
@@ -74,6 +91,26 @@ void APartyInputController::BuildButtonInputs()
         DecIA->ValueType = EInputActionValueType::Boolean;
         DevDecrementAction = DecIA;
     }
+    if (DevLeftAction == nullptr)
+    {
+        UInputAction* LeftIA = NewObject<UInputAction>(Outer, NAME_None, RF_Transient);
+        LeftIA->ValueType = EInputActionValueType::Boolean;
+        DevLeftAction = LeftIA;
+    }
+    if (DevRightAction == nullptr)
+    {
+        UInputAction* RightIA = NewObject<UInputAction>(Outer, NAME_None, RF_Transient);
+        RightIA->ValueType = EInputActionValueType::Boolean;
+        DevRightAction = RightIA;
+    }
+#if !UE_BUILD_SHIPPING
+    if (DevMenuAction == nullptr)
+    {
+        UInputAction* MenuIA = NewObject<UInputAction>(Outer, NAME_None, RF_Transient);
+        MenuIA->ValueType = EInputActionValueType::Boolean;
+        DevMenuAction = MenuIA;
+    }
+#endif
 
     // Build the mapping context.
     UInputMappingContext* IMC = NewObject<UInputMappingContext>(Outer, NAME_None, RF_Transient);
@@ -105,22 +142,44 @@ void APartyInputController::BuildButtonInputs()
         IMC->MapKey(MainButtonAction.Get(), EKeys::Enter);
     }
 
-    // Dev-only Up/Down nudge keys — no physical arcade equivalent, gated by its own
+    // Gamepad face buttons: a third source for a subset of the same actions, so
+    // a controller can drive the four "cardinal" buttons alongside the cabinet
+    // and the keyboard. All three mappings fire the identical action, which is
+    // what keeps HandleButtonPressed's contract device-agnostic.
+    if (bEnableGamepadEmulation)
+    {
+        for (const FPartyGamepadMapping& Mapping : GetGamepadFaceButtonMappings())
+        {
+            if (ButtonActions.IsValidIndex(Mapping.ButtonIndex))
+            {
+                IMC->MapKey(ButtonActions[Mapping.ButtonIndex].Get(), Mapping.Key);
+            }
+        }
+    }
+
+    // Dev-only arrow + Tab keys — no physical arcade equivalent, gated by their own
     // flag (independent of bEnableKeyboardEmulation, since arrows aren't part of the
-    // asdfjkl;ertghuio scheme).
+    // asdfjkl;ertghuio scheme). Tab is unbound elsewhere in the project, so there is
+    // nothing to conflict with.
     if (bEnableDevControls)
     {
         IMC->MapKey(DevIncrementAction.Get(), EKeys::Up);
         IMC->MapKey(DevDecrementAction.Get(), EKeys::Down);
+        IMC->MapKey(DevLeftAction.Get(),      EKeys::Left);
+        IMC->MapKey(DevRightAction.Get(),     EKeys::Right);
+#if !UE_BUILD_SHIPPING
+        IMC->MapKey(DevMenuAction.Get(),      EKeys::Tab);
+#endif
     }
 
     ButtonMappingContext = IMC;
 
     UE_LOG(LogPartyInput, Log,
-        TEXT("PartyInputController: built %d player actions + 1 main button action + IMC at runtime%s%s."),
+        TEXT("PartyInputController: built %d player actions + 1 main button action + IMC at runtime%s%s%s."),
         NUM_BUTTONS,
         bEnableKeyboardEmulation ? TEXT(" (+ keyboard emulation: asdfkjl;ertghuio + Enter)") : TEXT(""),
-        bEnableDevControls ? TEXT(" (+ dev Up/Down)") : TEXT(""));
+        bEnableGamepadEmulation ? TEXT(" (+ gamepad face buttons -> 0/2/4/6)") : TEXT(""),
+        bEnableDevControls ? TEXT(" (+ dev arrows/Tab)") : TEXT(""));
 }
 
 // ---- Lifecycle ------------------------------------------------------------
@@ -200,6 +259,23 @@ void APartyInputController::SetupInputComponent()
         EIC->BindAction(DevDecrementAction, ETriggerEvent::Started, this,
                         &APartyInputController::OnDevDecrementStarted);
     }
+    if (DevLeftAction)
+    {
+        EIC->BindAction(DevLeftAction, ETriggerEvent::Started, this,
+                        &APartyInputController::OnDevLeftStarted);
+    }
+    if (DevRightAction)
+    {
+        EIC->BindAction(DevRightAction, ETriggerEvent::Started, this,
+                        &APartyInputController::OnDevRightStarted);
+    }
+#if !UE_BUILD_SHIPPING
+    if (DevMenuAction)
+    {
+        EIC->BindAction(DevMenuAction, ETriggerEvent::Started, this,
+                        &APartyInputController::OnDevMenuStarted);
+    }
+#endif
 
     UE_LOG(LogPartyInput, Log, TEXT("PartyInputController: bound %d player actions + main button."), ButtonActions.Num());
 }
@@ -312,3 +388,38 @@ void APartyInputController::HandleDevDecrement()
     UE_LOG(LogPartyInput, Log, TEXT("Dev decrement pressed."));
     OnDevDecrement.Broadcast();
 }
+
+void APartyInputController::OnDevLeftStarted(const FInputActionInstance& /*Instance*/)
+{
+    HandleDevLeft();
+}
+
+void APartyInputController::OnDevRightStarted(const FInputActionInstance& /*Instance*/)
+{
+    HandleDevRight();
+}
+
+void APartyInputController::HandleDevLeft()
+{
+    UE_LOG(LogPartyInput, Log, TEXT("Dev left pressed."));
+    OnDevLeft.Broadcast();
+}
+
+void APartyInputController::HandleDevRight()
+{
+    UE_LOG(LogPartyInput, Log, TEXT("Dev right pressed."));
+    OnDevRight.Broadcast();
+}
+
+#if !UE_BUILD_SHIPPING
+void APartyInputController::OnDevMenuStarted(const FInputActionInstance& /*Instance*/)
+{
+    HandleDevMenu();
+}
+
+void APartyInputController::HandleDevMenu()
+{
+    UE_LOG(LogPartyInput, Log, TEXT("Dev menu key pressed."));
+    OnDevMenu.Broadcast();
+}
+#endif

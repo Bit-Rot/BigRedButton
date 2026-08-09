@@ -175,7 +175,7 @@ bool FPartyInputRejectTest::RunTest(const FString& Parameters)
 //
 // Verifies:
 //   (a) GetKeyboardEmulationKeys() returns exactly 16 keys in the order
-//       a w s e d r f g h j i k o l p ;
+//       a s d f j k l ; e r t g h u i o
 //   (b) When an IMC is built with keyboard emulation on, each keyboard key
 //       is mapped to the action at the matching button index — i.e. the IMC
 //       contains a mapping from EmulKeys[k] to Actions[k].
@@ -195,13 +195,14 @@ bool FPartyInputKeyboardEmulationTest::RunTest(const FString& Parameters)
     const TArray<FKey>& Keys = APartyInputController::GetKeyboardEmulationKeys();
     TestEqual(TEXT("GetKeyboardEmulationKeys returns 16 keys"), Keys.Num(), NUM_BUTTONS);
 
-    // Expected sequence: a w s e d r f g h j i k o l p ;
+    // Expected sequence (see GetKeyboardEmulationKeys): buttons 1-8 are the home
+    // row halves a s d f / j k l ; and buttons 9-16 are e r t g h u i o.
     // We check by FKey identity (FKey comparison by name).
     const TArray<FKey> Expected = {
-        EKeys::A, EKeys::W, EKeys::S, EKeys::E,
-        EKeys::D, EKeys::R, EKeys::F, EKeys::G,
-        EKeys::H, EKeys::U, EKeys::J, EKeys::I,
-        EKeys::K, EKeys::O, EKeys::L, EKeys::P,
+        EKeys::A, EKeys::S, EKeys::D, EKeys::F,
+        EKeys::J, EKeys::K, EKeys::L, EKeys::Semicolon,
+        EKeys::E, EKeys::R, EKeys::T, EKeys::G,
+        EKeys::H, EKeys::U, EKeys::I, EKeys::O,
     };
 
     for (int32 k = 0; k < NUM_BUTTONS && k < Keys.Num(); k++)
@@ -258,6 +259,105 @@ bool FPartyInputKeyboardEmulationTest::RunTest(const FString& Parameters)
             *FString::Printf(TEXT("IMC maps EmulKey[%d] (%s) to action[%d]"),
                              k, *Keys[k].ToString(), k),
             bFound);
+    }
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// PartyButtons.Input.Dispatch.MapsGamepadFaceButtons
+//
+// The four face buttons drive the player buttons that sit in the matching
+// compass direction on screen (OctoOdyssey's arms 0/2/4/6 — see
+// GetGamepadFaceButtonMappings for the geometry). Verifies:
+//   (a) the table is exactly the four face buttons, on four distinct in-range
+//       button indices, with none duplicated;
+//   (b) an IMC built from the table maps each face button to the action at its
+//       stated index, in ADDITION to that action's existing mappings — a
+//       gamepad must add a source, never replace one.
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FPartyInputGamepadFaceButtonTest,
+    "PartyButtons.Input.Dispatch.MapsGamepadFaceButtons",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FPartyInputGamepadFaceButtonTest::RunTest(const FString& Parameters)
+{
+    constexpr int32 NUM_BUTTONS = 16;
+
+    // ---- (a) Verify the table ----------------------------------------------
+
+    const TArray<FPartyGamepadMapping>& Mappings = APartyInputController::GetGamepadFaceButtonMappings();
+    TestEqual(TEXT("There are four face-button mappings"), Mappings.Num(), 4);
+
+    // North/east/south/west, in the order the arms are indexed.
+    const TArray<FPartyGamepadMapping> Expected = {
+        { 0, EKeys::Gamepad_FaceButton_Top    },
+        { 2, EKeys::Gamepad_FaceButton_Right  },
+        { 4, EKeys::Gamepad_FaceButton_Bottom },
+        { 6, EKeys::Gamepad_FaceButton_Left   },
+    };
+
+    for (int32 i = 0; i < Expected.Num() && i < Mappings.Num(); i++)
+    {
+        TestEqual(*FString::Printf(TEXT("Mapping[%d] targets the expected button"), i),
+            Mappings[i].ButtonIndex, Expected[i].ButtonIndex);
+        TestEqual(*FString::Printf(TEXT("Mapping[%d] uses the expected key"), i),
+            Mappings[i].Key, Expected[i].Key);
+    }
+
+    TSet<int32> SeenIndices;
+    TSet<FKey>  SeenKeys;
+    for (const FPartyGamepadMapping& M : Mappings)
+    {
+        TestTrue(TEXT("Button index is within the 16-button range"),
+            M.ButtonIndex >= 0 && M.ButtonIndex < NUM_BUTTONS);
+        TestFalse(TEXT("No button index is mapped twice"), SeenIndices.Contains(M.ButtonIndex));
+        TestFalse(TEXT("No key is mapped twice"), SeenKeys.Contains(M.Key));
+        TestTrue(TEXT("The key is a gamepad key"), M.Key.IsGamepadKey());
+        SeenIndices.Add(M.ButtonIndex);
+        SeenKeys.Add(M.Key);
+    }
+
+    // ---- (b) Verify an IMC built the way BuildButtonInputs builds one -------
+
+    UObject* Outer = GetTransientPackage();
+
+    TArray<TObjectPtr<UInputAction>> Actions;
+    for (int32 i = 0; i < NUM_BUTTONS; i++)
+    {
+        UInputAction* IA = NewObject<UInputAction>(Outer, NAME_None, RF_Transient);
+        IA->ValueType = EInputActionValueType::Boolean;
+        Actions.Add(IA);
+    }
+
+    UInputMappingContext* IMC = NewObject<UInputMappingContext>(Outer, NAME_None, RF_Transient);
+    for (int32 i = 0; i < NUM_BUTTONS; i++)
+    {
+        IMC->MapKey(Actions[i].Get(), FKey(*FString::Printf(TEXT("GenericUSBController_Button%d"), i + 1)));
+    }
+    for (const FPartyGamepadMapping& M : Mappings)
+    {
+        IMC->MapKey(Actions[M.ButtonIndex].Get(), M.Key);
+    }
+
+    // Additive: the 16 controller keys are all still there.
+    const TArray<FEnhancedActionKeyMapping>& Built = IMC->GetMappings();
+    TestEqual(TEXT("IMC has 20 mappings (16 controller + 4 gamepad)"), Built.Num(), NUM_BUTTONS + Mappings.Num());
+
+    for (const FPartyGamepadMapping& M : Mappings)
+    {
+        bool bFound = false;
+        for (const FEnhancedActionKeyMapping& Built1 : Built)
+        {
+            if (Built1.Key == M.Key && Built1.Action == Actions[M.ButtonIndex])
+            {
+                bFound = true;
+                break;
+            }
+        }
+        TestTrue(*FString::Printf(TEXT("IMC maps %s to action[%d]"), *M.Key.ToString(), M.ButtonIndex), bFound);
     }
 
     return true;

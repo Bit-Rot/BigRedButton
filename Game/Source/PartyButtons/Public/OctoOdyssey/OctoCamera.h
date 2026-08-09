@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "OctoOdyssey/OctoTuning.h"
 #include "OctoCamera.generated.h"
 
 class UCameraComponent;
@@ -33,32 +34,24 @@ public:
     /** Begin following Target. Call once after both actors exist. */
     void SetFollowTarget(AOctoPawn* Target);
 
+    /**
+     * Swap in new camera values. Every field the camera reads is safe to change
+     * mid-round (nothing here is baked into a component at construction), so the
+     * dev tuning menu calls this on every keypress for a live preview.
+     */
+    void ApplyLiveTuning(const FOctoTuning& NewTuning);
+
 protected:
+    virtual void BeginPlay() override;
     virtual void Tick(float DeltaSeconds) override;
 
-    /** World X the octopus is locked to (see AOctoPawn) — the camera sits CameraDistanceX behind it. */
+    /**
+     * Camera values, pulled from UOctoTuningSubsystem in BeginPlay. Note
+     * PlayPlaneX lives here too: the camera and AOctoGameMode used to hold
+     * independent copies, so editing one silently framed the wrong plane.
+     */
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Camera")
-    float PlayPlaneX = 0.f;
-
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Camera")
-    float CameraDistanceX = 2000.f;
-
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Camera")
-    float CameraHeightOffset = 150.f;
-
-    /** Bias the frame toward +Y (the direction of the goal) rather than centering exactly on the octopus. */
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Camera")
-    float LeadY = 250.f;
-
-    /** Don't let the camera sink below this Z, e.g. if the octopus falls into a pit. */
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Camera")
-    float MinCameraZ = 200.f;
-
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Camera")
-    float FollowInterpSpeed = 4.f;
-
-    UPROPERTY(EditDefaultsOnly, Category = "Octo|Camera")
-    float CameraFieldOfView = 55.f;
+    FOctoTuning Tuning;
 
 private:
     UPROPERTY(VisibleAnywhere, Category = "Octo|Camera")

@@ -1,9 +1,11 @@
 #include "OctoOdyssey/OctoPawn.h"
 #include "PartyButtons.h"
+#include "OctoOdyssey/OctoTuningSubsystem.h"
 #include "Components/SphereComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "PhysicsEngine/BodyInstance.h"
+#include "PhysicalMaterials/PhysicalMaterial.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "UObject/ConstructorHelpers.h"
@@ -22,7 +24,6 @@ AOctoPawn::AOctoPawn()
     // ---- Body ------------------------------------------------------------
     BodySphere = CreateDefaultSubobject<USphereComponent>(TEXT("BodySphere"));
     RootComponent = BodySphere;
-    BodySphere->InitSphereRadius(SphereRadius);
     BodySphere->SetCollisionProfileName(TEXT("PhysicsActor")); // QueryAndPhysics, object type PhysicsBody
     BodySphere->SetGenerateOverlapEvents(true); // so AOctoGoalFlag's Trigger sees us
 
@@ -47,8 +48,6 @@ AOctoPawn::AOctoPawn()
     BodyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BodyMesh"));
     BodyMesh->SetupAttachment(RootComponent);
     BodyMesh->SetStaticMesh(SphereMesh);
-    // /Engine/BasicShapes/Sphere is ~100cm (1m) in diameter; scale factor == desired diameter in meters.
-    BodyMesh->SetRelativeScale3D(FVector(SphereRadius * 2.f / 100.f));
     BodyMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     BodyMesh->BodyInstance.bAutoWeld = false; // NoCollision alone does not stop autoweld
     BodyMesh->SetCastShadow(false);
@@ -64,20 +63,13 @@ AOctoPawn::AOctoPawn()
     // ---- Arms --------------------------------------------------------------
     ArmColliders.SetNum(OctoArm::NumArms);
     ArmMeshes.SetNum(OctoArm::NumArms);
+    HandMeshes.SetNum(OctoArm::NumArms);
 
     for (int32 i = 0; i < OctoArm::NumArms; i++)
     {
-        const FRotator RelRot = GetArmRelativeRotation(i);
-        // Rest pose: Extension == 0.
-        const float RestOffset = OctoArm::CapsuleCenterOffset(SphereRadius, ArmRadius, ArmHalfHeight, 0.f);
-        const FVector RestLocation = GetArmLocalDirection(i) * RestOffset;
-
         UCapsuleComponent* Collider = CreateDefaultSubobject<UCapsuleComponent>(*FString::Printf(TEXT("ArmCollider%d"), i));
         Collider->SetupAttachment(RootComponent);
-        Collider->InitCapsuleSize(ArmRadius, ArmHalfHeight);
         Collider->SetCollisionProfileName(TEXT("PhysicsActor"));
-        Collider->SetRelativeRotation(RelRot);
-        Collider->SetRelativeLocation(RestLocation);
         // bAutoWeld defaults true — this is a QueryAndPhysics, non-simulating
         // child of a simulating parent, so it welds into BodySphere's shape
         // union at physics-state creation (see the ctor comment on
@@ -87,10 +79,6 @@ AOctoPawn::AOctoPawn()
         UStaticMeshComponent* Mesh = CreateDefaultSubobject<UStaticMeshComponent>(*FString::Printf(TEXT("ArmMesh%d"), i));
         Mesh->SetupAttachment(RootComponent); // attaches to the ROOT, not the collider — see class comment
         Mesh->SetStaticMesh(CylinderMesh);
-        // /Engine/BasicShapes/Cylinder is 100cm diameter x 100cm tall, centered on its own origin, long axis local Z.
-        Mesh->SetRelativeScale3D(FVector(ArmRadius * 2.f / 100.f, ArmRadius * 2.f / 100.f, ArmHalfHeight * 2.f / 100.f));
-        Mesh->SetRelativeRotation(RelRot);
-        Mesh->SetRelativeLocation(RestLocation);
         Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
         Mesh->BodyInstance.bAutoWeld = false;
         Mesh->SetCastShadow(false);
@@ -103,32 +91,234 @@ AOctoPawn::AOctoPawn()
             }
         }
         ArmMeshes[i] = Mesh;
+
+        // ---- Hand: a ball on the capsule's outer cap, one hue per arm ----
+        UStaticMeshComponent* Hand = CreateDefaultSubobject<UStaticMeshComponent>(*FString::Printf(TEXT("HandMesh%d"), i));
+        Hand->SetupAttachment(RootComponent); // like the shaft, attaches to the ROOT — see class comment
+        Hand->SetStaticMesh(SphereMesh);
+        // No relative rotation — a sphere is rotationally symmetric.
+        Hand->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        Hand->BodyInstance.bAutoWeld = false;
+        Hand->SetCastShadow(false);
+        if (BasicMaterial)
+        {
+            if (UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(BasicMaterial, this))
+            {
+                MID->SetVectorParameterValue(TEXT("Color"), OctoArm::HandColor(i, OctoArm::NumArms));
+                Hand->SetMaterial(0, MID);
+            }
+        }
+        HandMeshes[i] = Hand;
+    }
+
+    // Every size, offset and scale comes from Tuning — at this point the shipping
+    // defaults, since no subsystem exists yet. OnConstruction runs this again
+    // with the tuned values, still before any physics state is created.
+    RebuildGeometry();
+}
+
+void AOctoPawn::OnConstruction(const FTransform& Transform)
+{
+    Super::OnConstruction(Transform);
+
+    // No subsystem outside a game world (editor viewport, CDO) — the C++
+    // defaults already in Tuning are the right answer there.
+    if (const UOctoTuningSubsystem* TuningSubsystem = UOctoTuningSubsystem::Get(this))
+    {
+        Tuning = TuningSubsystem->GetTuning();
+    }
+
+    RebuildGeometry();
+
+    // The arm colliders WELD into BodySphere, and a welded shape takes its
+    // material from the child component's own BodyInstance at the moment the
+    // shape is created. Setting it here — before registration — bakes it in;
+    // doing it afterwards would mean fighting the weld. ConfigureBodyPhysics
+    // handles the body sphere (and re-pushes these) once we're live.
+    ApplySurfaceMaterial();
+}
+
+void AOctoPawn::RebuildGeometry()
+{
+    if (!BodySphere) { return; }
+
+    const float R  = Tuning.SphereRadius;
+    const float Ar = Tuning.ArmRadius;
+    const float Ah = Tuning.ArmHalfHeight;
+
+    // Init* rather than Set*: this only ever runs before the physics state
+    // exists (constructor / OnConstruction), so there is no body setup to
+    // refresh and nothing to mark dirty.
+    BodySphere->InitSphereRadius(R);
+
+    if (BodyMesh)
+    {
+        // /Engine/BasicShapes/Sphere is ~100cm (1m) in diameter; scale factor == desired diameter in meters.
+        BodyMesh->SetRelativeScale3D(FVector(R * 2.f / 100.f));
+    }
+
+    for (int32 i = 0; i < OctoArm::NumArms; i++)
+    {
+        const FRotator RelRot = GetArmRelativeRotation(i);
+        const FVector  ArmDir = GetArmLocalDirection(i);
+
+        // Rest pose: Extension == 0. Tick takes over from the next frame.
+        if (ArmColliders.IsValidIndex(i) && ArmColliders[i])
+        {
+            ArmColliders[i]->InitCapsuleSize(Ar, Ah);
+            ArmColliders[i]->SetRelativeRotation(RelRot);
+            ArmColliders[i]->SetRelativeLocation(ArmDir * OctoArm::CapsuleCenterOffset(R, Ar, Ah, 0.f));
+        }
+
+        if (ArmMeshes.IsValidIndex(i) && ArmMeshes[i])
+        {
+            // /Engine/BasicShapes/Cylinder is 100cm diameter x 100cm tall, centered on its own origin, long axis local Z.
+            //
+            // The shaft is deliberately NOT the capsule's shape: it is drawn thinner
+            // (ArmMeshRadiusScale) and shorter (OctoArm::ArmMeshLength stops it at the hand
+            // center rather than the capsule tip), so it has its own center offset. The
+            // collider above is unaffected by both.
+            const float MeshRadius = Ar * Tuning.ArmMeshRadiusScale;
+            ArmMeshes[i]->SetRelativeScale3D(FVector(MeshRadius * 2.f / 100.f,
+                                                     MeshRadius * 2.f / 100.f,
+                                                     OctoArm::ArmMeshLength(Ar, Ah) / 100.f));
+            ArmMeshes[i]->SetRelativeRotation(RelRot);
+            ArmMeshes[i]->SetRelativeLocation(ArmDir * OctoArm::ArmMeshCenterOffset(R, Ar, Ah, 0.f));
+        }
+
+        if (HandMeshes.IsValidIndex(i) && HandMeshes[i])
+        {
+            // Radius == ArmRadius exactly, so the hand's surface IS the capsule cap's surface.
+            HandMeshes[i]->SetRelativeScale3D(FVector(Ar * 2.f / 100.f));
+            HandMeshes[i]->SetRelativeLocation(ArmDir * OctoArm::HandCenterOffset(R, Ar, Ah, 0.f));
+        }
     }
 }
 
 void AOctoPawn::BeginPlay()
 {
     Super::BeginPlay();
+    ConfigureBodyPhysics();
+}
 
+void AOctoPawn::ConfigureBodyPhysics()
+{
     // CreateDOFLock (invoked via SetConstraintMode) anchors the constraint
     // at the body's CURRENT world location and early-outs unless the body
     // is already dynamic. By BeginPlay, SpawnActor has placed us at our
     // final spawn transform AND SetSimulatePhysics(true) already ran in the
     // constructor, so both preconditions hold.
+    //
+    // The DOF lock is the one thing here that must NOT be re-applied later,
+    // which is why ApplyLiveTuning calls the pieces below rather than this.
     BodySphere->SetConstraintMode(EDOFMode::YZPlane);
-    BodySphere->SetMassOverrideInKg(NAME_None, BodyMassKg, true);
-    BodySphere->SetLinearDamping(LinearDamping);
-    BodySphere->SetAngularDamping(AngularDamping);
-    BodySphere->SetUseCCD(true);
+
+    ApplyBodyPhysicsTuning();
+    ApplySurfaceMaterial();
+}
+
+void AOctoPawn::ApplyBodyPhysicsTuning()
+{
+    if (!BodySphere) { return; }
+
+    BodySphere->SetMassOverrideInKg(NAME_None, Tuning.BodyMassKg, true);
+    BodySphere->SetLinearDamping(Tuning.LinearDamping);
+    BodySphere->SetAngularDamping(Tuning.AngularDamping);
+    BodySphere->SetUseCCD(Tuning.bUseCCD);
     if (FBodyInstance* BI = BodySphere->GetBodyInstance())
     {
-        BI->SetMaxDepenetrationVelocity(MaxDepenetrationVelocity);
+        BI->SetMaxDepenetrationVelocity(Tuning.MaxDepenetrationVelocity);
     }
+}
+
+void AOctoPawn::ApplySurfaceMaterial()
+{
+    if (!Tuning.bOverridePhysicalMaterial)
+    {
+        // Leave the Chaos defaults alone. Nothing to un-apply: the only way
+        // bOverridePhysicalMaterial can go true->false is via the dev menu,
+        // whose Accept path reloads the course anyway.
+        return;
+    }
+
+    if (!SurfaceMaterial)
+    {
+        // The project ships no UPhysicalMaterial assets, so there is nothing to
+        // load — build one and keep it for the pawn's lifetime.
+        SurfaceMaterial = NewObject<UPhysicalMaterial>(this, NAME_None, RF_Transient);
+    }
+
+    if (!SurfaceMaterial) { return; }
+
+    SurfaceMaterial->Friction       = Tuning.SurfaceFriction;
+    SurfaceMaterial->StaticFriction = Tuning.SurfaceStaticFriction;
+    SurfaceMaterial->Restitution    = Tuning.SurfaceRestitution;
+
+    if (BodySphere)
+    {
+        BodySphere->SetPhysMaterialOverride(SurfaceMaterial);
+    }
+    for (const TObjectPtr<UCapsuleComponent>& Collider : ArmColliders)
+    {
+        if (Collider)
+        {
+            Collider->SetPhysMaterialOverride(SurfaceMaterial);
+        }
+    }
+}
+
+void AOctoPawn::ApplyLiveTuning(const FOctoTuning& NewTuning)
+{
+    // Geometry fields are copied but NOT acted on: RebuildGeometry may only run
+    // before the physics state exists (see the class comment). They take effect
+    // on the next spawn, which is exactly what the menu's Accept button forces.
+    Tuning = NewTuning;
+
+    ApplyBodyPhysicsTuning();
+    ApplySurfaceMaterial();
+}
+
+void AOctoPawn::SetPhysicsFrozen(bool bFrozen)
+{
+    if (bPhysicsFrozen == bFrozen) { return; }
+    bPhysicsFrozen = bFrozen;
+
+    // Deliberately NOT SetSimulatePhysics(false/true): that tears down and
+    // rebuilds the body instance, and this body is a welded shape union (the
+    // eight arm capsules) carrying a DOF lock that CreateDOFLock will only
+    // re-anchor under conditions this class already documents as delicate. A
+    // weld that failed to re-form would silently stop the arms colliding at
+    // all. Switching gravity off and parking the body is just as still, and
+    // touches nothing structural.
+    BodySphere->SetEnableGravity(!bFrozen);
+
+    if (bFrozen)
+    {
+        // Drop every held arm: presses that arrive during the intro are the
+        // player dismissing the tutorial, not steering the octopus. The game
+        // mode replays whatever is still held once the round goes live (see
+        // AOctoGameMode::ShouldReplayHeldButtonsOnStart).
+        for (int32 i = 0; i < OctoArm::NumArms; i++)
+        {
+            Arms[i].bPressed = false;
+        }
+
+        BodySphere->SetPhysicsLinearVelocity(FVector::ZeroVector);
+        BodySphere->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+        return;
+    }
+
+    // Nothing has touched the octopus during the intro, so it's very likely
+    // asleep by now — gravity alone won't wake it.
+    BodySphere->WakeRigidBody();
 }
 
 void AOctoPawn::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
+
+    if (bPhysicsFrozen) { return; }
+
     TickArms(DeltaSeconds);
 }
 
@@ -146,30 +336,72 @@ void AOctoPawn::NotifyArmReleased(int32 ArmIndex)
 
 FVector AOctoPawn::GetArmLocalDirection(int32 ArmIndex) const
 {
-    return OctoArm::ArmDirectionLocal(ArmIndex, OctoArm::NumArms, ArmAngleOffsetDegrees);
+    return OctoArm::ArmDirectionLocal(ArmIndex, OctoArm::NumArms, Tuning.ArmAngleOffsetDegrees);
 }
 
 FRotator AOctoPawn::GetArmRelativeRotation(int32 ArmIndex) const
 {
-    const float ThetaDeg = ArmAngleOffsetDegrees + 360.f * static_cast<float>(ArmIndex) / static_cast<float>(OctoArm::NumArms);
+    const float ThetaDeg = Tuning.ArmAngleOffsetDegrees + 360.f * static_cast<float>(ArmIndex) / static_cast<float>(OctoArm::NumArms);
     return FRotator(0.f, 0.f, ThetaDeg);
 }
 
 void AOctoPawn::TickArms(float DeltaSeconds)
 {
+    // Every arm's push-off is measured against the SAME frame-start velocity,
+    // and none is applied until all eight have been stepped. Applying them as
+    // they're found would make the result depend on arm order: an octopus
+    // wedged in a gap with two opposing arms planted would see each arm in turn
+    // "correct" the velocity the other just set, and buzz. Batched, opposing
+    // pushes cancel — which is right, since a wedged octopus shouldn't move.
+    const FVector FrameStartVelocity = BodySphere->GetPhysicsLinearVelocity();
+
+    TArray<FPendingPush> Pushes;
+    Pushes.Reserve(OctoArm::NumArms);
+
     for (int32 i = 0; i < OctoArm::NumArms; i++)
     {
-        TickArm(i, DeltaSeconds);
+        TickArm(i, DeltaSeconds, FrameStartVelocity, Pushes);
+    }
+
+    if (Pushes.IsEmpty()) { return; }
+
+    for (const FPendingPush& Push : Pushes)
+    {
+        if (Tuning.bPushAtImpactPoint)
+        {
+            BodySphere->AddImpulseAtLocation(Push.Impulse, Push.Location);
+        }
+        else
+        {
+            // Through the centre of mass: no torque, so a corner push launches
+            // cleanly instead of tumbling the body.
+            BodySphere->AddImpulse(Push.Impulse);
+        }
+    }
+
+    BodySphere->SetPhysicsLinearVelocity(
+        OctoArm::ClampLaunchVelocity(BodySphere->GetPhysicsLinearVelocity(), Tuning.MaxLaunchSpeed));
+
+    // Angular counterpart. Off-centre pushes are the whole reason the octopus
+    // tumbles, and AngularDamping alone takes seconds to bleed a hard spin off.
+    if (Tuning.MaxAngularSpeedDeg > 0.f)
+    {
+        BodySphere->SetPhysicsAngularVelocityInDegrees(
+            OctoArm::ClampLaunchVelocity(BodySphere->GetPhysicsAngularVelocityInDegrees(), Tuning.MaxAngularSpeedDeg));
     }
 }
 
-void AOctoPawn::TickArm(int32 ArmIndex, float DeltaSeconds)
+void AOctoPawn::TickArm(int32 ArmIndex, float DeltaSeconds, const FVector& FrameStartVelocity, TArray<FPendingPush>& OutPushes)
 {
     FOctoArmState& Arm = Arms[ArmIndex];
 
-    const float SafeMax = FMath::Min(ArmMaxExtension, OctoArm::MaxSafeExtension(SphereRadius, ArmRadius, ArmHalfHeight));
+    const float R  = Tuning.SphereRadius;
+    const float Ar = Tuning.ArmRadius;
+    const float Ah = Tuning.ArmHalfHeight;
+
+    const float SafeMax  = FMath::Min(Tuning.ArmMaxExtension, OctoArm::MaxSafeExtension(R, Ar, Ah));
     const float E        = Arm.Extension;
-    const float EDesired = OctoArm::StepExtension(E, Arm.bPressed, ExtendSpeed, RetractSpeed, SafeMax, DeltaSeconds);
+    const float EDesired = OctoArm::StepExtension(E, Arm.bPressed, Tuning.ExtendSpeed, Tuning.RetractSpeed, SafeMax, DeltaSeconds);
 
     float EAchieved  = EDesired;
     bool  bBlocked   = false;
@@ -184,19 +416,26 @@ void AOctoPawn::TickArm(int32 ArmIndex, float DeltaSeconds)
         const FQuat   ArmWorldQuat = GetActorQuat() * GetArmRelativeRotation(ArmIndex).Quaternion();
         const FVector Origin     = GetActorLocation();
 
-        const float StartOffset = OctoArm::CapsuleCenterOffset(SphereRadius, ArmRadius, ArmHalfHeight, E);
-        const float EndOffset   = OctoArm::CapsuleCenterOffset(SphereRadius, ArmRadius, ArmHalfHeight, EDesired);
+        const float StartOffset = OctoArm::CapsuleCenterOffset(R, Ar, Ah, E);
+        const float EndOffset   = OctoArm::CapsuleCenterOffset(R, Ar, Ah, EDesired);
         const FVector Start = Origin + WorldDir * StartOffset;
         const FVector End   = Origin + WorldDir * EndOffset;
 
         FCollisionObjectQueryParams ObjectParams;
         ObjectParams.AddObjectTypesToQuery(ECC_WorldStatic);
         ObjectParams.AddObjectTypesToQuery(ECC_WorldDynamic);
+        if (Tuning.bSweepPhysicsBodies)
+        {
+            // Off by default: with this channel absent an arm passes straight
+            // through physics props instead of pushing off them. QueryParams
+            // already ignores this actor, so we can't plant an arm on ourselves.
+            ObjectParams.AddObjectTypesToQuery(ECC_PhysicsBody);
+        }
 
         FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(OctoArmSweep), /*bTraceComplex=*/false, this);
 
-        const float SweepRadius     = FMath::Max(1.f, ArmRadius - ArmSweepSkin);
-        const float SweepHalfHeight = FMath::Max(SweepRadius, ArmHalfHeight - ArmSweepSkin);
+        const float SweepRadius     = FMath::Max(1.f, Ar - Tuning.ArmSweepSkin);
+        const float SweepHalfHeight = FMath::Max(SweepRadius, Ah - Tuning.ArmSweepSkin);
 
         bBlocked = GetWorld()->SweepSingleByObjectType(
             Hit, Start, End, ArmWorldQuat, ObjectParams,
@@ -213,41 +452,77 @@ void AOctoPawn::TickArm(int32 ArmIndex, float DeltaSeconds)
     // Visuals follow the ACHIEVED extension, not the desired one, so they
     // always match collision (no gap ever opens between arm and body,
     // no visible clipping through world geometry).
+    const FVector ArmDir = GetArmLocalDirection(ArmIndex);
+
     if (ArmMeshes.IsValidIndex(ArmIndex) && ArmMeshes[ArmIndex])
     {
-        const float MeshOffset = OctoArm::CapsuleCenterOffset(SphereRadius, ArmRadius, ArmHalfHeight, EAchieved);
-        ArmMeshes[ArmIndex]->SetRelativeLocation(GetArmLocalDirection(ArmIndex) * MeshOffset);
+        const float MeshOffset = OctoArm::ArmMeshCenterOffset(R, Ar, Ah, EAchieved);
+        ArmMeshes[ArmIndex]->SetRelativeLocation(ArmDir * MeshOffset);
     }
 
-    // ---- Launch (once, on the free->blocked transition) and sustain ----
-    if (bBlocked && !Arm.bBlockedLastTick)
+    if (HandMeshes.IsValidIndex(ArmIndex) && HandMeshes[ArmIndex])
     {
-        const float BlockedFrac = OctoArm::BlockedFraction(EDesired - E, EAchieved - E);
-        const float ImpulsePerUnitSpeed = ExtendSpeed > 0.f ? (ArmLaunchImpulse / ExtendSpeed) : 0.f;
-        const float J = OctoArm::LaunchImpulseMagnitude(BlockedFrac, ExtendSpeed, ImpulsePerUnitSpeed, ArmLaunchImpulse);
-
-        if (J > 0.f)
-        {
-            const FVector WorldDir = GetActorQuat().RotateVector(GetArmLocalDirection(ArmIndex));
-            BodySphere->AddImpulseAtLocation(-WorldDir * J, Hit.ImpactPoint);
-            BodySphere->SetPhysicsLinearVelocity(
-                OctoArm::ClampLaunchVelocity(BodySphere->GetPhysicsLinearVelocity(), MaxLaunchSpeed));
-        }
+        const float HandOffset = OctoArm::HandCenterOffset(R, Ar, Ah, EAchieved);
+        HandMeshes[ArmIndex]->SetRelativeLocation(ArmDir * HandOffset);
     }
+
+    // ---- Push-off: hold the body to the arm's own extension speed ----
+    //
+    // Applied EVERY tick the arm is planted and still trying to extend, not
+    // just on the free->blocked transition — an absolute arm doesn't stop
+    // pushing halfway through its stroke. It self-limits: the moment the body
+    // leaves the surface the sweep above finds nothing, bBlocked goes false,
+    // and the push ends. Once the stroke runs out (EAchieved == SafeMax) the
+    // fully-extended arm holds the body up as ordinary welded collision
+    // geometry instead, which is why no separate "sustain force" exists.
     if (bBlocked && Arm.bPressed && EAchieved < SafeMax)
     {
-        const FVector WorldDir = GetActorQuat().RotateVector(GetArmLocalDirection(ArmIndex));
-        BodySphere->AddForceAtLocation(-WorldDir * ArmSustainForce, Hit.ImpactPoint);
+        const FVector PushDir = -GetActorQuat().RotateVector(GetArmLocalDirection(ArmIndex));
+        const float Deficit = OctoArm::PushOffSpeedDeficit(FrameStartVelocity, PushDir, Tuning.ExtendSpeed);
+
+        if (Deficit > 0.f)
+        {
+            // Scaling the impulse by mass is what makes the launch depend on
+            // arm SPEED alone. AddImpulseAtLocation gives dV = J/m and
+            // dW = I^-1 (r x J); with J proportional to m and I proportional
+            // to m, mass cancels from both — so retuning BodyMassKg changes how
+            // the octopus takes hits without touching how high it flies. The
+            // impact point (rather than the centre of mass) is the default:
+            // it's what makes a corner push tumble the body — see
+            // FOctoTuning::bPushAtImpactPoint.
+            OutPushes.Add({ PushDir * (Deficit * Tuning.BodyMassKg), Hit.ImpactPoint });
+        }
+
+        // ---- Grip: the friction the push-off cannot provide ----
+        //
+        // PushOffSpeedDeficit only ever adds speed ALONG the arm and leaves
+        // motion across the contact untouched, which is what makes pushing off
+        // feel slippery. Contact friction can't take up the slack either: a
+        // planted arm's collider is teleported by ApplyArmColliderExtension, so
+        // Chaos sees a moved shape carrying no shape velocity and the tangential
+        // constraint has almost nothing to bite on during the stroke.
+        //
+        // So model it directly — bleed off the velocity perpendicular to the
+        // arm while it's planted. Batched into OutPushes with everything else so
+        // opposing arms still cancel rather than fight (see TickArms).
+        if (Tuning.ArmGripFraction > 0.f)
+        {
+            const FVector Tangential = FVector::VectorPlaneProject(FrameStartVelocity, PushDir);
+            if (!Tangential.IsNearlyZero())
+            {
+                OutPushes.Add({ -Tangential * (Tuning.ArmGripFraction * Tuning.BodyMassKg), Hit.ImpactPoint });
+            }
+        }
     }
 
-    Arm.Extension        = EAchieved;
-    Arm.bBlockedLastTick  = bBlocked;
+    Arm.Extension = EAchieved;
 }
 
 void AOctoPawn::ApplyArmColliderExtension(int32 ArmIndex, float Extension)
 {
     if (!ArmColliders.IsValidIndex(ArmIndex) || !ArmColliders[ArmIndex]) { return; }
 
-    const float Offset = OctoArm::CapsuleCenterOffset(SphereRadius, ArmRadius, ArmHalfHeight, Extension);
+    const float Offset = OctoArm::CapsuleCenterOffset(
+        Tuning.SphereRadius, Tuning.ArmRadius, Tuning.ArmHalfHeight, Extension);
     ArmColliders[ArmIndex]->SetRelativeLocation(GetArmLocalDirection(ArmIndex) * Offset);
 }

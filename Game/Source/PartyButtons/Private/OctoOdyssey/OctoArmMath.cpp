@@ -33,6 +33,46 @@ float CapsuleCenterOffset(float SphereRadius, float CapsuleRadius, float Capsule
     return SphereRadius + CapsuleRadius - CapsuleHalfHeight + Extension;
 }
 
+float HandCenterOffset(float SphereRadius, float CapsuleRadius, float CapsuleHalfHeight, float Extension)
+{
+    // Written as "capsule center, then out to the cap center" rather than as the
+    // simplified SphereRadius + Extension, so the geometric intent survives a future
+    // change to CapsuleCenterOffset. The two forms are pinned equal by a test.
+    return CapsuleCenterOffset(SphereRadius, CapsuleRadius, CapsuleHalfHeight, Extension)
+         + (CapsuleHalfHeight - CapsuleRadius);
+}
+
+float ArmMeshLength(float CapsuleRadius, float CapsuleHalfHeight)
+{
+    // Inner tip (capsule center - HalfHeight) to hand center (capsule center +
+    // HalfHeight - CapsuleRadius).
+    return 2.f * CapsuleHalfHeight - CapsuleRadius;
+}
+
+float ArmMeshCenterOffset(float SphereRadius, float CapsuleRadius, float CapsuleHalfHeight, float Extension)
+{
+    // Shortened at the tip end only, so the mesh center sits half the removed length
+    // (CapsuleRadius/2) inward of the capsule center.
+    return CapsuleCenterOffset(SphereRadius, CapsuleRadius, CapsuleHalfHeight, Extension)
+         - 0.5f * CapsuleRadius;
+}
+
+FLinearColor HandColor(int32 ArmIndex, int32 ArmCount)
+{
+    if (ArmCount <= 0) { return FLinearColor::White; }
+
+    // Same wrap convention as ArmDirectionLocal — handles negative indices too.
+    const int32 Wrapped = ((ArmIndex % ArmCount) + ArmCount) % ArmCount;
+
+    // Hue in degrees, saturation and value both pegged to 1 for maximum separability.
+    // Built in float rather than via MakeFromHSV8 because that helper quantises hue to
+    // a byte spanning 0..360 over 0..255, which would space 8 arms 45.18deg apart
+    // instead of exactly 45deg. FLinearColor's HSV convention is (R=hue degrees,
+    // G=saturation, B=value).
+    const float HueDegrees = 360.f * static_cast<float>(Wrapped) / static_cast<float>(ArmCount);
+    return FLinearColor(HueDegrees, 1.f, 1.f).HSVToLinearRGB();
+}
+
 float MaxSafeExtension(float SphereRadius, float CapsuleRadius, float CapsuleHalfHeight)
 {
     // Binding constraint: the capsule's inner cap (offset - HalfHeight) must
@@ -50,19 +90,13 @@ float StepExtension(float CurrentExtension, bool bPressed, float ExtendSpeed, fl
     return FMath::Clamp(CurrentExtension + Speed * DeltaSeconds, 0.f, MaxExtension);
 }
 
-float BlockedFraction(float DesiredDelta, float AchievedDelta)
+float PushOffSpeedDeficit(const FVector& BodyVelocity, const FVector& PushDirection, float ArmSpeed)
 {
-    if (DesiredDelta <= 0.f)
-    {
-        // Nothing was being attempted (retracting, or already at the target) — nothing was blocked.
-        return 0.f;
-    }
-    return FMath::Clamp(1.f - AchievedDelta / DesiredDelta, 0.f, 1.f);
-}
+    if (ArmSpeed <= 0.f) { return 0.f; }
 
-float LaunchImpulseMagnitude(float BlockedFrac, float ArmSpeed, float ImpulsePerUnitSpeed, float MaxImpulse)
-{
-    return FMath::Clamp(BlockedFrac * ArmSpeed * ImpulsePerUnitSpeed, 0.f, MaxImpulse);
+    // Only the component along the push matters — a body sliding sideways
+    // along a wall is neither helped nor hindered by an arm planted into it.
+    return FMath::Max(0.f, ArmSpeed - (BodyVelocity | PushDirection));
 }
 
 FVector ClampLaunchVelocity(const FVector& Velocity, float MaxSpeed)

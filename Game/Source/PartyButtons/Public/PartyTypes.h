@@ -84,6 +84,40 @@ struct PARTYBUTTONS_API FPartyPawnMarker
 };
 
 /**
+ * One row of the dev tuning menu (Tab), rendered by APartyFlowHUD::DrawDevMenu.
+ *
+ * The menu is deliberately generic: the HUD knows how to draw a list of labelled
+ * rows with optional sliders, and nothing else. Which rows exist, what they mean
+ * and what changing one does is entirely up to the GameMode supplying them via
+ * APartyGameModeBase::GetDevMenuRows — which is what keeps the HUD from ever
+ * having to cast to a concrete GameMode, and what lets any minigame get the same
+ * menu for the cost of overriding a few virtuals.
+ */
+USTRUCT()
+struct PARTYBUTTONS_API FPartyDevMenuRow
+{
+    GENERATED_BODY()
+
+    /** Left-hand text. For a header this is the section name; for an action, the button caption. */
+    UPROPERTY() FString Label;
+
+    /** Right-hand text ("900.0", "On"). Empty for headers and actions. */
+    UPROPERTY() FString ValueText;
+
+    /** Slider fill, 0..1. Negative means "draw no slider" — used by headers and actions. */
+    UPROPERTY() float Normalized = -1.f;
+
+    /** A section heading: not selectable, drawn in the accent colour, no slider. */
+    UPROPERTY() bool bIsHeader = false;
+
+    /** A button (Accept / Cancel): selectable and clickable, but has no value to drag. */
+    UPROPERTY() bool bIsAction = false;
+
+    /** Appended to the label in a dimmer colour, e.g. "(restart)". */
+    UPROPERTY() FString Note;
+};
+
+/**
  * Maps a phase (or a specific game map) to its travel destination.
  * Returned by PartyFlow::GetRoute(); used by APartyGameModeBase::TravelToPhase.
  *

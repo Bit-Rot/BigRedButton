@@ -19,6 +19,7 @@ public class PartyButtons : ModuleRules
             "InputCore",
             "EnhancedInput",
             "PartyInput",
+            "PhysicsCore", // UPhysicalMaterial — see AOctoPawn::ApplySurfaceMaterial
         });
     }
 }

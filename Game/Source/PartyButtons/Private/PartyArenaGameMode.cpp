@@ -8,40 +8,12 @@
 #include "GameFramework/PlayerController.h"
 #include "Engine/World.h"
 #include "EngineUtils.h" // TActorIterator, used by ShouldBlockNow to scan live bullets
-#include "Kismet/GameplayStatics.h"
-#include "Sound/SoundBase.h"
-#include "UObject/ConstructorHelpers.h"
-
-namespace
-{
-    // beep....beep....BOOOP — the third beat is the "GO!" that transitions to
-    // Playing (see EnterPlaying). Times are seconds into the discovery phase.
-    struct FCountdownBeat { float Time; bool bIsBoop; };
-    constexpr FCountdownBeat GCountdownBeats[] = {
-        { 1.0f, false },
-        { 2.0f, false },
-        { 3.0f, true  },
-    };
-    constexpr int32 GNumCountdownBeats = UE_ARRAY_COUNT(GCountdownBeats);
-}
 
 APartyArenaGameMode::APartyArenaGameMode()
 {
     DefaultPawnClass = nullptr; // pawns are spawned manually and never possessed (see APartyDuelPawn class comment)
     ArenaClass        = APartyArena::StaticClass();
     DuelPawnClass     = APartyDuelPawn::StaticClass();
-
-    // Placeholder countdown one-shots — a stock engine 1kHz sine ping,
-    // played back at two different pitches for beep vs. BOOOP (see
-    // PlayCountdownBeat). Designer-authored SoundBase assets can be plugged
-    // in via the EditDefaultsOnly properties without touching this default.
-    static ConstructorHelpers::FObjectFinder<USoundBase> ToneFinder(
-        TEXT("/Engine/EngineSounds/1kSineTonePing.1kSineTonePing"));
-    if (ToneFinder.Succeeded())
-    {
-        BeepSound = ToneFinder.Object;
-        BoopSound = ToneFinder.Object;
-    }
 }
 
 FString APartyArenaGameMode::GetHudSubtitle() const
@@ -51,13 +23,7 @@ FString APartyArenaGameMode::GetHudSubtitle() const
 
 void APartyArenaGameMode::BeginPlay()
 {
-    Super::BeginPlay(); // resolves CurrentRosterIndex / CurrentGameName for the HUD
-
-    SubPhase          = ESubPhase::Tutorial;
-    SubPhaseElapsed   = 0.f;
-    NextCountdownBeat = 0;
-    HeldButtons.Reset();
-    HumanParticipants.Reset();
+    Super::BeginPlay(); // resolves CurrentRosterIndex / CurrentGameName, resets the intro overlay
 
     SpawnArena();
     SpawnPawns();
@@ -82,47 +48,9 @@ void APartyArenaGameMode::BeginPlay()
         return;
     }
 
-    // Freeze pawns until the countdown BOOOP — they're visible but static so
-    // players have a still target to identify above their number label.
-    SetPawnsFrozen(true);
-}
-
-void APartyArenaGameMode::Tick(float DeltaSeconds)
-{
-    Super::Tick(DeltaSeconds); // drives TickAI, which we've gated to Playing
-
-    if (bWinnerDeclared || SubPhase == ESubPhase::Playing)
-    {
-        return;
-    }
-
-    SubPhaseElapsed += DeltaSeconds;
-
-    if (SubPhase == ESubPhase::Tutorial)
-    {
-        if (SubPhaseElapsed >= TutorialMaxSeconds)
-        {
-            EnterDiscovery();
-        }
-        return;
-    }
-
-    // Discovery: fire countdown beats as they come due, then transition to
-    // Playing on the BOOOP beat. Order matters — PlayCountdownBeat first so the
-    // audio starts on the same frame the game unpauses (spec: "the game starts
-    // as the BOOOP plays (not after)").
-    while (NextCountdownBeat < GNumCountdownBeats &&
-           SubPhaseElapsed >= GCountdownBeats[NextCountdownBeat].Time)
-    {
-        const bool bIsBoop = GCountdownBeats[NextCountdownBeat].bIsBoop;
-        PlayCountdownBeat(bIsBoop);
-        ++NextCountdownBeat;
-        if (bIsBoop)
-        {
-            EnterPlaying();
-            return;
-        }
-    }
+    // Pawns are frozen until the countdown BOOOP by the inherited intro overlay
+    // (see SetGameplayFrozen) — visible but static, so players have a still
+    // target to identify above their number label.
 }
 
 void APartyArenaGameMode::SpawnArena()
@@ -257,26 +185,23 @@ void APartyArenaGameMode::SpawnPawns()
             AIPawnState.NextDecisionTime = GetWorld()->GetTimeSeconds()
                 + AIRng.FRandRange(AIParams.ReactionLatencySeconds, AIParams.ReactionLatencySeconds * 2.f);
         }
-        else
-        {
-            // Tutorial's "all humans holding" gate treats every non-AI pawn as
-            // a human — this covers registered lobby players AND the dev
-            // fallback set, so opening L_GameA directly still exits the
-            // tutorial the moment the fallback participants press.
-            HumanParticipants.Add(PlayerIndex);
-        }
+        // The tutorial's "all humans holding" ready check waits on every non-AI
+        // participant — this covers registered lobby players AND the dev
+        // fallback set, so opening L_GameA directly still exits the tutorial
+        // the moment the fallback participants press.
+        RegisterParticipant(PlayerIndex, AIParticipants.Contains(PlayerIndex));
     }
 
     UE_LOG(LogPartyButtons, Log,
-        TEXT("APartyArenaGameMode: spawned %d duel pawn(s) (%d AI, %d human)."),
-        Pawns.Num(), AIParticipants.Num(), HumanParticipants.Num());
+        TEXT("APartyArenaGameMode: spawned %d duel pawn(s) (%d AI)."),
+        Pawns.Num(), AIParticipants.Num());
 }
 
 void APartyArenaGameMode::TickAI(float DeltaSeconds)
 {
-    // AI stays silent through the intro overlay — same "no game logic runs
-    // until the BOOOP" rule the human-facing OnPlayerButton path enforces.
-    if (SubPhase != ESubPhase::Playing) { return; }
+    // The base only calls TickAI during Playing, so AI stays silent through the
+    // intro overlay for free — same "no game logic runs until the BOOOP" rule
+    // the human-facing OnPlayerButton gate enforces.
     if (bWinnerDeclared || AIState.IsEmpty() || !GetWorld()) { return; }
 
     const double Now = GetWorld()->GetTimeSeconds();
@@ -469,109 +394,25 @@ FLinearColor APartyArenaGameMode::PlayerColor(int32 PlayerIndex)
     return Palette[PlayerIndex % UE_ARRAY_COUNT(Palette)];
 }
 
-void APartyArenaGameMode::OnPlayerButton(int32 PlayerIndex)
+void APartyArenaGameMode::OnGameplayButton(int32 PlayerIndex)
 {
-    HeldButtons.Add(PlayerIndex);
-
-    switch (SubPhase)
+    if (TObjectPtr<APartyDuelPawn>* Found = Pawns.Find(PlayerIndex))
     {
-    case ESubPhase::Tutorial:
-        // Ready-check dismiss: every human is now holding → skip the rest of
-        // the 5-second timer. (No humans registered? Only the timer dismisses.)
-        if (AllHumansHolding())
-        {
-            EnterDiscovery();
-        }
-        return;
-
-    case ESubPhase::Discovery:
-        // Held state is read by GetPawnMarkers() → HUD tints the number label.
-        // No pawn action here — the game hasn't started.
-        return;
-
-    case ESubPhase::Playing:
-        if (TObjectPtr<APartyDuelPawn>* Found = Pawns.Find(PlayerIndex))
-        {
-            if (APartyDuelPawn* Pawn = *Found) { Pawn->NotifyPressed(); }
-        }
-        return;
+        if (APartyDuelPawn* Pawn = *Found) { Pawn->NotifyPressed(); }
     }
 }
 
-void APartyArenaGameMode::OnPlayerButtonReleased(int32 PlayerIndex)
+void APartyArenaGameMode::OnGameplayButtonReleased(int32 PlayerIndex)
 {
-    HeldButtons.Remove(PlayerIndex);
-
-    if (SubPhase != ESubPhase::Playing) { return; }
-
     if (TObjectPtr<APartyDuelPawn>* Found = Pawns.Find(PlayerIndex))
     {
         if (APartyDuelPawn* Pawn = *Found) { Pawn->NotifyReleased(); }
     }
 }
 
-// ---- Intro overlay helpers --------------------------------------------------
+// ---- Intro overlay hooks ----------------------------------------------------
 
-bool APartyArenaGameMode::AllHumansHolding() const
-{
-    if (HumanParticipants.IsEmpty()) { return false; }
-    for (int32 P : HumanParticipants)
-    {
-        if (!HeldButtons.Contains(P)) { return false; }
-    }
-    return true;
-}
-
-void APartyArenaGameMode::EnterDiscovery()
-{
-    if (SubPhase != ESubPhase::Tutorial) { return; }
-
-    SubPhase          = ESubPhase::Discovery;
-    SubPhaseElapsed   = 0.f;
-    NextCountdownBeat = 0;
-
-    UE_LOG(LogPartyButtons, Log,
-        TEXT("APartyArenaGameMode: tutorial dismissed — entering %.1fs discovery phase."),
-        DiscoverySeconds);
-}
-
-void APartyArenaGameMode::EnterPlaying()
-{
-    if (SubPhase == ESubPhase::Playing) { return; }
-
-    SubPhase = ESubPhase::Playing;
-    SetPawnsFrozen(false);
-
-    // Any button already held when the BOOOP fires counts as a real press —
-    // hand it off to the pawn now so a player pre-charging isn't punished.
-    for (int32 PlayerIndex : HeldButtons)
-    {
-        if (TObjectPtr<APartyDuelPawn>* Found = Pawns.Find(PlayerIndex))
-        {
-            if (APartyDuelPawn* Pawn = *Found) { Pawn->NotifyPressed(); }
-        }
-    }
-
-    // Clear any half-formed AI plan and re-arm the reaction gate so nobody
-    // fires on the exact start frame — same seeding SpawnPawns does.
-    if (GetWorld())
-    {
-        const PartyDuelAI::FDuelAIParams Params = GetActiveAIParams();
-        const double Now = GetWorld()->GetTimeSeconds();
-        for (auto& Pair : AIState)
-        {
-            Pair.Value.bHolding         = false;
-            Pair.Value.bPlanCommitted   = false;
-            Pair.Value.bBlockPending    = false;
-            Pair.Value.NextDecisionTime = Now
-                + AIRng.FRandRange(Params.ReactionLatencySeconds, Params.ReactionLatencySeconds * 2.f);
-        }
-    }
-
-    UE_LOG(LogPartyButtons, Log, TEXT("APartyArenaGameMode: GO! — discovery ended, game live."));
-}
-
-void APartyArenaGameMode::SetPawnsFrozen(bool bFrozen)
+void APartyArenaGameMode::SetGameplayFrozen(bool bFrozen)
 {
     for (const TPair<int32, TObjectPtr<APartyDuelPawn>>& Pair : Pawns)
     {
@@ -582,47 +423,30 @@ void APartyArenaGameMode::SetPawnsFrozen(bool bFrozen)
     }
 }
 
-void APartyArenaGameMode::PlayCountdownBeat(bool bIsBoop)
+void APartyArenaGameMode::OnGameplayStarted()
 {
-    USoundBase* Sound = bIsBoop ? BoopSound : BeepSound;
-    if (!Sound)
-    {
-        UE_LOG(LogPartyButtons, Warning,
-            TEXT("APartyArenaGameMode: countdown %s sound not set — skipping."),
-            bIsBoop ? TEXT("BOOOP") : TEXT("beep"));
-        return;
-    }
+    // Clear any half-formed AI plan and re-arm the reaction gate so nobody
+    // fires on the exact start frame — same seeding SpawnPawns does.
+    if (!GetWorld()) { return; }
 
-    // Pitch-shift the same tone so beep vs. BOOOP is unambiguous: lead-in
-    // beeps are bright and quiet, the BOOOP is deeper and louder.
-    const float Volume = bIsBoop ? 1.0f : 0.6f;
-    const float Pitch  = bIsBoop ? 0.5f : 1.4f;
-    UGameplayStatics::PlaySound2D(this, Sound, Volume, Pitch);
+    const PartyDuelAI::FDuelAIParams Params = GetActiveAIParams();
+    const double Now = GetWorld()->GetTimeSeconds();
+    for (auto& Pair : AIState)
+    {
+        Pair.Value.bHolding         = false;
+        Pair.Value.bPlanCommitted   = false;
+        Pair.Value.bBlockPending    = false;
+        Pair.Value.NextDecisionTime = Now
+            + AIRng.FRandRange(Params.ReactionLatencySeconds, Params.ReactionLatencySeconds * 2.f);
+    }
 }
 
 // ---- HUD-facing accessors ---------------------------------------------------
 
-EPartyOverlayPhase APartyArenaGameMode::GetOverlayPhase() const
-{
-    switch (SubPhase)
-    {
-    case ESubPhase::Tutorial:  return EPartyOverlayPhase::Tutorial;
-    case ESubPhase::Discovery: return EPartyOverlayPhase::Discovery;
-    case ESubPhase::Playing:   return EPartyOverlayPhase::Playing;
-    }
-    return EPartyOverlayPhase::None;
-}
-
-float APartyArenaGameMode::GetTutorialRemainingSeconds() const
-{
-    if (SubPhase != ESubPhase::Tutorial) { return -1.f; }
-    return FMath::Max(0.f, TutorialMaxSeconds - SubPhaseElapsed);
-}
-
 TArray<FPartyPawnMarker> APartyArenaGameMode::GetPawnMarkers() const
 {
     TArray<FPartyPawnMarker> Markers;
-    if (SubPhase != ESubPhase::Discovery) { return Markers; }
+    if (GetOverlayPhase() != EPartyOverlayPhase::Discovery) { return Markers; }
 
     Markers.Reserve(Pawns.Num());
     for (const TPair<int32, TObjectPtr<APartyDuelPawn>>& Pair : Pawns)
@@ -634,7 +458,7 @@ TArray<FPartyPawnMarker> APartyArenaGameMode::GetPawnMarkers() const
         M.WorldLocation = Pawn->GetActorLocation();
         M.PlayerIndex   = Pair.Key;
         M.Color         = PlayerColor(Pair.Key);
-        M.bHeld         = HeldButtons.Contains(Pair.Key);
+        M.bHeld         = GetHeldButtons().Contains(Pair.Key);
         Markers.Add(M);
     }
     return Markers;

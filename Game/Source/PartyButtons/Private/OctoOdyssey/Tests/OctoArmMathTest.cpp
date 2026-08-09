@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "OctoOdyssey/OctoArmMath.h"
+#include "OctoOdyssey/OctoTuning.h"
 
 // --------------------------------------------------------------------------
 // PartyButtons.Octo.ArmMath.*
@@ -202,13 +203,154 @@ bool FOctoCapsuleCenterOffsetIsLinearInExtension::RunTest(const FString& Paramet
 // --------------------------------------------------------------------------
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FOctoHandSphereCoincidesWithCapsuleCap,
+    "PartyButtons.Octo.ArmMath.HandSphereCoincidesWithCapsuleCap",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FOctoHandSphereCoincidesWithCapsuleCap::RunTest(const FString& Parameters)
+{
+    // THE property that matters for the hand: drawn at radius r, its outer surface is
+    // exactly the capsule's tip, so the visible ball and the collider agree everywhere.
+    for (float R : { 30.f, 50.f, 80.f })
+    {
+        for (float r : { 8.f, 12.f, 20.f })
+        {
+            for (float HH : { 20.f, 30.f, 45.f })
+            {
+                for (float E : { 0.f, 7.f, 40.f })
+                {
+                    const float HandSurface  = OctoArm::HandCenterOffset(R, r, HH, E) + r;
+                    const float CapsuleTip   = OctoArm::CapsuleCenterOffset(R, r, HH, E) + HH;
+                    TestTrue(FString::Printf(TEXT("Hand surface == capsule tip (R=%.0f r=%.0f HH=%.0f E=%.0f)"), R, r, HH, E),
+                        FMath::IsNearlyEqual(HandSurface, CapsuleTip, 0.001f));
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+// --------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FOctoHandCenterOffsetIsSphereRadiusPlusExtension,
+    "PartyButtons.Octo.ArmMath.HandCenterOffsetIsSphereRadiusPlusExtension",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FOctoHandCenterOffsetIsSphereRadiusPlusExtension::RunTest(const FString& Parameters)
+{
+    // The closed form documented on HandCenterOffset: independent of both capsule
+    // dimensions, so at rest the hand center sits exactly ON the body's surface.
+    for (float R : { 30.f, 50.f, 80.f })
+    {
+        for (float r : { 8.f, 12.f, 20.f })
+        {
+            for (float HH : { 20.f, 30.f, 45.f })
+            {
+                for (float E : { 0.f, 7.f, 40.f })
+                {
+                    TestTrue(FString::Printf(TEXT("HandCenterOffset == R + E (R=%.0f r=%.0f HH=%.0f E=%.0f)"), R, r, HH, E),
+                        FMath::IsNearlyEqual(OctoArm::HandCenterOffset(R, r, HH, E), R + E, 0.001f));
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+// --------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FOctoArmMeshSpansInnerTipToHandCenter,
+    "PartyButtons.Octo.ArmMath.ArmMeshSpansInnerTipToHandCenter",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FOctoArmMeshSpansInnerTipToHandCenter::RunTest(const FString& Parameters)
+{
+    // The shaft is shortened at the TIP end only: its far end stops at the hand center
+    // (so it can't poke out through the front of the ball) while its inner end still
+    // matches the capsule's, keeping it buried in the body sphere.
+    for (float R : { 30.f, 50.f, 80.f })
+    {
+        for (float r : { 8.f, 12.f, 20.f })
+        {
+            for (float HH : { 20.f, 30.f, 45.f })
+            {
+                for (float E : { 0.f, 7.f, 40.f })
+                {
+                    const float Center   = OctoArm::ArmMeshCenterOffset(R, r, HH, E);
+                    const float Half     = 0.5f * OctoArm::ArmMeshLength(r, HH);
+                    const FString Where  = FString::Printf(TEXT("(R=%.0f r=%.0f HH=%.0f E=%.0f)"), R, r, HH, E);
+
+                    TestTrue(FString::Printf(TEXT("Shaft far end == hand center %s"), *Where),
+                        FMath::IsNearlyEqual(Center + Half, OctoArm::HandCenterOffset(R, r, HH, E), 0.001f));
+                    TestTrue(FString::Printf(TEXT("Shaft inner end == capsule inner end %s"), *Where),
+                        FMath::IsNearlyEqual(Center - Half, OctoArm::CapsuleCenterOffset(R, r, HH, E) - HH, 0.001f));
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+// --------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FOctoHandColorsAreDistinctAndFullySaturated,
+    "PartyButtons.Octo.ArmMath.HandColorsAreDistinctAndFullySaturated",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FOctoHandColorsAreDistinctAndFullySaturated::RunTest(const FString& Parameters)
+{
+    TArray<FLinearColor> Colors;
+    for (int32 i = 0; i < OctoArm::NumArms; i++)
+    {
+        Colors.Add(OctoArm::HandColor(i, OctoArm::NumArms));
+    }
+
+    for (int32 i = 0; i < Colors.Num(); i++)
+    {
+        const FLinearColor& C = Colors[i];
+
+        // Full saturation and value: one channel pegged at 1, another at 0.
+        const float MaxChannel = FMath::Max3(C.R, C.G, C.B);
+        const float MinChannel = FMath::Min3(C.R, C.G, C.B);
+        TestTrue(FString::Printf(TEXT("Arm %d is at full value (max channel == 1)"), i),
+            FMath::IsNearlyEqual(MaxChannel, 1.f, 0.001f));
+        TestTrue(FString::Printf(TEXT("Arm %d is fully saturated (min channel == 0)"), i),
+            FMath::IsNearlyEqual(MinChannel, 0.f, 0.001f));
+        TestTrue(FString::Printf(TEXT("Arm %d is opaque"), i), FMath::IsNearlyEqual(C.A, 1.f, 0.001f));
+
+        // Visually distinct from every other arm.
+        for (int32 j = i + 1; j < Colors.Num(); j++)
+        {
+            const FLinearColor& D = Colors[j];
+            const float Separation = FMath::Abs(C.R - D.R) + FMath::Abs(C.G - D.G) + FMath::Abs(C.B - D.B);
+            TestTrue(FString::Printf(TEXT("Arms %d and %d are visually distinct"), i, j), Separation > 0.25f);
+        }
+    }
+
+    // Same wrap convention as ArmDirectionLocal, and degenerate counts don't divide by zero.
+    TestEqual(TEXT("Index wraps forward"), OctoArm::HandColor(OctoArm::NumArms, OctoArm::NumArms), Colors[0]);
+    TestEqual(TEXT("Index wraps backward"), OctoArm::HandColor(-1, OctoArm::NumArms), Colors[OctoArm::NumArms - 1]);
+    TestEqual(TEXT("Zero arm count is safe"), OctoArm::HandColor(0, 0), FLinearColor::White);
+
+    return true;
+}
+
+// --------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FOctoExtensionInvariantsHold,
     "PartyButtons.Octo.ArmMath.ExtensionInvariantsHold",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FOctoExtensionInvariantsHold::RunTest(const FString& Parameters)
 {
-    // Shipping defaults (see AOctoPawn tunables).
+    // A worked example, independent of the shipping numbers: 2*30 - 12 == 48.
     TestEqual(TEXT("MaxSafeExtension(50,12,30) == 48"), OctoArm::MaxSafeExtension(50.f, 12.f, 30.f), 48.f);
 
     // Over a grid of plausible (R, r, HH), the inner cap never pokes outside the sphere at MaxSafeExtension.
@@ -227,13 +369,15 @@ bool FOctoExtensionInvariantsHold::RunTest(const FString& Parameters)
         }
     }
 
-    // Shipping default ArmMaxExtension (45) respects both stated invariants.
-    constexpr float SphereRadius  = 50.f;
-    constexpr float ArmMaxExtension = 45.f;
+    // The ACTUAL shipping defaults, read from FOctoTuning rather than restated as
+    // literals — the literals that used to live here silently drifted out of date
+    // and stopped guarding anything.
+    const FOctoTuning Defaults;
     TestTrue(TEXT("Default ArmMaxExtension <= MaxSafeExtension"),
-        ArmMaxExtension <= OctoArm::MaxSafeExtension(SphereRadius, 12.f, 30.f));
+        Defaults.ArmMaxExtension <= OctoArm::MaxSafeExtension(
+            Defaults.SphereRadius, Defaults.ArmRadius, Defaults.ArmHalfHeight));
     TestTrue(TEXT("Default ArmMaxExtension < sphere diameter"),
-        ArmMaxExtension < 2.f * SphereRadius);
+        Defaults.ArmMaxExtension < 2.f * Defaults.SphereRadius);
 
     return true;
 }
@@ -247,6 +391,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FOctoStepExtensionRampsAndClamps::RunTest(const FString& Parameters)
 {
+    // Arbitrary values chosen so the step arithmetic below comes out exact —
+    // deliberately NOT the shipping defaults, which live in FOctoTuning.
     constexpr float ExtendSpeed  = 450.f;
     constexpr float RetractSpeed = 300.f;
     constexpr float MaxExtension = 45.f;
@@ -290,57 +436,56 @@ bool FOctoStepExtensionRampsAndClamps::RunTest(const FString& Parameters)
 // --------------------------------------------------------------------------
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-    FOctoBlockedFractionBounds,
-    "PartyButtons.Octo.ArmMath.BlockedFractionBounds",
+    FOctoPushOffSpeedDeficitOnlyEverAdds,
+    "PartyButtons.Octo.ArmMath.PushOffSpeedDeficitOnlyEverAdds",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-bool FOctoBlockedFractionBounds::RunTest(const FString& Parameters)
+bool FOctoPushOffSpeedDeficitOnlyEverAdds::RunTest(const FString& Parameters)
 {
-    TestEqual(TEXT("Fully blocked (achieved 0 of desired) -> 1"), OctoArm::BlockedFraction(10.f, 0.f), 1.f);
-    TestEqual(TEXT("Fully unblocked (achieved == desired) -> 0"), OctoArm::BlockedFraction(10.f, 10.f), 0.f);
-    TestEqual(TEXT("Half blocked -> 0.5"), OctoArm::BlockedFraction(10.f, 5.f), 0.5f);
+    constexpr float ArmSpeed = 900.f;
+    const FVector   Up(0.f, 0.f, 1.f); // push direction: away from a floor contact
 
-    // Zero or negative desired delta never divides by zero — mirrors
-    // PartyDuel::ChargeToSpeed's degenerate-range handling.
-    TestEqual(TEXT("Zero desired delta -> 0"), OctoArm::BlockedFraction(0.f, 0.f), 0.f);
-    TestEqual(TEXT("Negative desired delta -> 0"), OctoArm::BlockedFraction(-5.f, 0.f), 0.f);
+    // At rest, a planted arm has to supply the whole extension speed.
+    TestEqual(TEXT("At rest -> full ArmSpeed"),
+        OctoArm::PushOffSpeedDeficit(FVector::ZeroVector, Up, ArmSpeed), ArmSpeed);
 
-    // Achieved overshooting desired (shouldn't happen in practice) clamps to 0, not negative.
-    TestEqual(TEXT("Achieved > desired clamps to 0"), OctoArm::BlockedFraction(10.f, 15.f), 0.f);
+    // Already rising, but slower than the arm extends: top up the difference.
+    TestEqual(TEXT("Rising at 300 -> tops up to ArmSpeed"),
+        OctoArm::PushOffSpeedDeficit(FVector(0.f, 0.f, 300.f), Up, ArmSpeed), 600.f);
 
-    return true;
-}
+    // Already outrunning the arm: NEVER brake. This is the property that lets
+    // several arms compose and stops a player killing their own momentum.
+    TestEqual(TEXT("Rising faster than ArmSpeed -> 0, not negative"),
+        OctoArm::PushOffSpeedDeficit(FVector(0.f, 0.f, 1500.f), Up, ArmSpeed), 0.f);
+    TestEqual(TEXT("Rising at exactly ArmSpeed -> 0"),
+        OctoArm::PushOffSpeedDeficit(FVector(0.f, 0.f, ArmSpeed), Up, ArmSpeed), 0.f);
 
-// --------------------------------------------------------------------------
+    // Falling INTO the contact: the deficit exceeds ArmSpeed, because that
+    // downward momentum has to be reversed as well as replaced.
+    TestEqual(TEXT("Falling at 400 -> ArmSpeed + 400"),
+        OctoArm::PushOffSpeedDeficit(FVector(0.f, 0.f, -400.f), Up, ArmSpeed), ArmSpeed + 400.f);
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-    FOctoLaunchImpulseIsZeroWhenUnblockedAndClamped,
-    "PartyButtons.Octo.ArmMath.LaunchImpulseIsZeroWhenUnblockedAndClamped",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+    // Motion perpendicular to the push is irrelevant — sliding along a wall is
+    // neither helped nor hindered by an arm planted into it.
+    TestEqual(TEXT("Perpendicular motion is ignored"),
+        OctoArm::PushOffSpeedDeficit(FVector(0.f, 5000.f, 0.f), Up, ArmSpeed), ArmSpeed);
 
-bool FOctoLaunchImpulseIsZeroWhenUnblockedAndClamped::RunTest(const FString& Parameters)
-{
-    constexpr float ArmSpeed        = 450.f;
-    constexpr float ImpulsePerSpeed = 20.f;
-    constexpr float MaxImpulse      = 9000.f;
+    // Degenerate arm speeds never produce a push.
+    TestEqual(TEXT("Zero ArmSpeed -> 0"),
+        OctoArm::PushOffSpeedDeficit(FVector::ZeroVector, Up, 0.f), 0.f);
+    TestEqual(TEXT("Negative ArmSpeed -> 0"),
+        OctoArm::PushOffSpeedDeficit(FVector::ZeroVector, Up, -100.f), 0.f);
 
-    TestEqual(TEXT("BlockedFrac 0 -> impulse 0"),
-        OctoArm::LaunchImpulseMagnitude(0.f, ArmSpeed, ImpulsePerSpeed, MaxImpulse), 0.f);
-
-    // Monotonically non-decreasing in BlockedFrac.
-    float Prev = 0.f;
-    bool bMonotonic = true;
-    for (float Frac = 0.f; Frac <= 1.f; Frac += 0.1f)
+    // Never negative, for any velocity along the push axis.
+    bool bNonNegative = true;
+    for (float Vz = -2000.f; Vz <= 2000.f; Vz += 137.f)
     {
-        const float J = OctoArm::LaunchImpulseMagnitude(Frac, ArmSpeed, ImpulsePerSpeed, MaxImpulse);
-        if (J < Prev - KINDA_SMALL_NUMBER) { bMonotonic = false; }
-        Prev = J;
+        if (OctoArm::PushOffSpeedDeficit(FVector(0.f, 0.f, Vz), Up, ArmSpeed) < 0.f)
+        {
+            bNonNegative = false;
+        }
     }
-    TestTrue(TEXT("LaunchImpulseMagnitude is monotonically non-decreasing in BlockedFrac"), bMonotonic);
-
-    // Never exceeds MaxImpulse.
-    const float Extreme = OctoArm::LaunchImpulseMagnitude(1.f, 10000.f, 1000.f, MaxImpulse);
-    TestEqual(TEXT("Impulse clamps to MaxImpulse"), Extreme, MaxImpulse);
+    TestTrue(TEXT("PushOffSpeedDeficit is never negative"), bNonNegative);
 
     return true;
 }
