@@ -25,8 +25,18 @@ namespace
 {
     const TCHAR* const OctoMeshPath = TEXT("/Game/OctoOdyssey/SK_Okto.SK_Okto");
 
-    /** cm of slack. The mesh comes from Blender via FBX, so exact equality is not on offer. */
-    constexpr float Tolerance = 0.1f;
+    /**
+     * cm of slack. The mesh comes from Blender via FBX, so exact equality is not
+     * on offer.
+     *
+     * Named MeshTolerance, not plain "Tolerance": a bare `Tolerance` at file
+     * scope is a unity-build landmine. UE::Math::TTransform's comparison helpers
+     * all take a parameter by that name, so the moment another test in the same
+     * unity blob instantiates FTransform::Equals, every one of those trips C4459
+     * ("hides global declaration") — and bWarningsAsErrors turns that into a
+     * build failure in a file nobody touched.
+     */
+    constexpr float MeshTolerance = 0.1f;
 
     USkeletalMesh* LoadOctoMesh()
     {
@@ -173,7 +183,7 @@ bool FOctoSkeletonReachMatchesTuning::RunTest(const FString& Parameters)
         TestTrue(
             FString::Printf(TEXT("Arm %d's modelled reach is %.3f, expected %.3f (SphereRadius %.1f + max extension %.1f)"),
                 i, ModelledTip, ExpectedTip, Defaults.SphereRadius, SafeMax),
-            FMath::IsNearlyEqual(ModelledTip, ExpectedTip, Tolerance));
+            FMath::IsNearlyEqual(ModelledTip, ExpectedTip, MeshTolerance));
 
         // Reference pose == full extension, so the stretch factor there must be 1.
         TestTrue(
@@ -192,7 +202,7 @@ bool FOctoSkeletonReachMatchesTuning::RunTest(const FString& Parameters)
             FString::Printf(TEXT("Arm %d's retracted tip sits on the body surface"), i),
             FMath::IsNearlyEqual(
                 Arm.ChainOriginOffset + Arm.RestChainLength * RetractedScale,
-                Defaults.SphereRadius, Tolerance));
+                Defaults.SphereRadius, MeshTolerance));
 
         // The chain root is inside the body sphere, which is why retracting is a
         // stretch to ~0.1 rather than a stretch to 0.
@@ -210,9 +220,9 @@ bool FOctoSkeletonReachMatchesTuning::RunTest(const FString& Parameters)
     for (int32 i = 1; i < Arms.Num(); i++)
     {
         TestTrue(FString::Printf(TEXT("Arm %d's chain length matches arm 0's"), i),
-            FMath::IsNearlyEqual(Arms[i].RestChainLength, Arms[0].RestChainLength, Tolerance));
+            FMath::IsNearlyEqual(Arms[i].RestChainLength, Arms[0].RestChainLength, MeshTolerance));
         TestTrue(FString::Printf(TEXT("Arm %d's chain origin matches arm 0's"), i),
-            FMath::IsNearlyEqual(Arms[i].ChainOriginOffset, Arms[0].ChainOriginOffset, Tolerance));
+            FMath::IsNearlyEqual(Arms[i].ChainOriginOffset, Arms[0].ChainOriginOffset, MeshTolerance));
     }
 
     return true;
@@ -273,7 +283,7 @@ bool FOctoSkeletonBodyChainResolves::RunTest(const FString& Parameters)
     TestTrue(
         FString::Printf(TEXT("The tip sits at the chain's full length along the rest direction (%s)"),
             *Body.TipRestCS.ToString()),
-        Body.TipRestCS.Equals(Body.RefCS[0].GetLocation() + Body.RestDir * Body.ChainLength, Tolerance));
+        Body.TipRestCS.Equals(Body.RefCS[0].GetLocation() + Body.RestDir * Body.ChainLength, MeshTolerance));
 
     // The bend composes down the chain, so it has to BE a chain.
     for (int32 i = 1; i < Body.ChainIndices.Num(); i++)

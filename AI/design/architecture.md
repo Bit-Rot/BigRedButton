@@ -141,15 +141,40 @@ HUD's first `DrawHUD` reads the correct phase immediately. All travel calls are
 deferred one tick (via `SetTimerForNextTick`) to avoid calling `OpenLevel` from
 inside `BeginPlay` or a delegate handler.
 
-### OctoOdyssey (roster slot 2 / L_GameC)
+### OctoOdyssey (standalone game / L_OctoOdyssey)
 
 A QWOP-style co-op physics game — up to 8 players each control one arm of a
 single shared `AOctoPawn`. Button i extends arm i fast; releasing retracts
 it. Pushing arms against level geometry is the only way to move; motion is
 confined to the Y-Z plane (`EDOFMode::YZPlane`), rotation only about X.
-Reaching the goal flag reloads L_GameC — this game deliberately never calls
-`DeclareWinner`/`DeclareNoContest` and never rejoins the LevelSelect/Results
-flow (see `AOctoGameMode::ReloadCourse`'s comment).
+
+**OctoOdyssey is NOT part of the party session.** It used to be roster slot 2
+(L_GameC), an `APartyMinigameGameMode` subclass that reloaded its map on
+reaching the flag. It is now a self-contained game: its own level, its own main
+menu, two courses (normal and hard) and its own persistent top-ten scoreboards.
+`AOctoGameMode` derives straight from `APartyGameModeBase`, and roster slot 2
+carries no GameMode override any more. See `AOctoGameMode`'s class comment for
+the three specific things that forced the split — the short version is that
+`APartyMinigameGameMode::OnPlayerButton` is `final` and swallows every press
+outside live gameplay, which a menu and a name-entry screen cannot survive.
+
+This is the first of what the repo is becoming: a container of independent
+games rather than one session of minigames.
+
+**There is no map travel inside OctoOdyssey.** Menu island, normal course and
+hard course are three places in ONE level, stacked along −X, and moving between
+them is an `APlayerController::SetViewTargetWithBlend` — not an `OpenLevel`.
+The flow is `MainMenu → Playing → ScoreEntry → MainMenu`, with `ScoreView` off
+the menu; there is deliberately no tutorial and no countdown between picking a
+course and controlling the octopus.
+
+**Positions live in the level, not in code.** `AOctoSpawnPoint` and
+`AOctoGoalFlag` are tagged with an `EOctoCourse`, and `AOctoViewPoint` carries
+the fixed menu camera. A course's spawn-point X *is* that course's play plane:
+the octopus is pinned to it and `AOctoCamera::SetPlayPlaneX` frames the same
+number, so the two cannot desync. Island spacing has one hard constraint —
+`spacing > CameraDistanceX + island depth`, or one island sits on another
+island's camera. See `AI/build_octo_odyssey.py`'s header.
 
 All OctoOdyssey code lives under its own subfolder (not flat in the module
 root like Reflex Rumble) — `Public/OctoOdyssey/` + `Private/OctoOdyssey/`,
@@ -162,19 +187,27 @@ classes prefixed `AOcto*`/`FOcto*`/namespaces `OctoArm`, `OctoBody`,
 | `Public/OctoOdyssey/OctoBodySpring.h` + `Private/` | Pure, world-free head-spring math (`namespace OctoBody`) — damped spring, chain bend, impact squash |
 | `Public/OctoOdyssey/OctoSkeleton.h` + `Private/` | The SK_Okto rig contract: `FOctoArmBones` / `FOctoBodyBones` measured out of the mesh's own reference skeleton, never hard-coded |
 | `Public/OctoOdyssey/OctoTuning.h` + `Private/` | `FOctoTuning` — every game-feel knob, plus the descriptor table the dev menu, the sliders and the JSON/ini round trip all read |
-| `Public/OctoOdyssey/OctoTuningSubsystem.h` + `Private/` | `UOctoTuningSubsystem` — GameInstance-scoped live tuning, so it survives the `OpenLevel` that Accept triggers |
+| `Public/OctoOdyssey/OctoTuningSubsystem.h` + `Private/` | `UOctoTuningSubsystem` — GameInstance-scoped live tuning, so it survives the respawn that Accept triggers |
+| `Public/OctoOdyssey/OctoTypes.h` | `EOctoCourse` (Normal/Hard), `EOctoViewRole`, `EOctoFlowState` — the tags that let one level hold three places |
+| `Public/OctoOdyssey/OctoScores.h` + `Private/` | Pure, world-free scoring (`namespace OctoScores`) — ranking, the 37-glyph name alphabet, `M:SS.mm`, and the ini format |
+| `Public/OctoOdyssey/OctoScoreSubsystem.h` + `Private/` | `UOctoScoreSubsystem` — the two live top-ten tables, written to `Config/OctoScores.ini` on every entry |
 | `Public/OctoOdyssey/OctoPawn.h` + `Private/` | `AOctoPawn` — the octopus: one simulating `USphereComponent` body + 8 welded `UCapsuleComponent` arms + SK_Okto posed bone-by-bone from collision state |
-| `Public/OctoOdyssey/OctoGameMode.h` + `Private/` | `AOctoGameMode` — spawns the octopus/camera, routes the first 8 buttons to arms, reloads on goal, owns the Tab dev menu |
+| `Public/OctoOdyssey/OctoGameMode.h` + `Private/` | `AOctoGameMode` — the whole flow state machine: menu, course entry, run clock, score entry, plus the Tab dev menu |
+| `Public/OctoOdyssey/OctoHUD.h` + `Private/` | `AOctoHUD : APartyFlowHUD` — menu, running clock, side-by-side scoreboard, in-place name entry |
+| `Public/OctoOdyssey/OctoPlayerController.h` + `Private/` | `AOctoPlayerController` — `APartyInputController` with a 1-second main-button hold, so committing a name cannot be a slip |
+| `Public/OctoOdyssey/OctoViewPoint.h` + `Private/` | `AOctoViewPoint` — placeable fixed camera (the menu shot) |
 | `Public/OctoOdyssey/OctoCamera.h` + `Private/` | `AOctoCamera` — side-on follow camera (looks along +X at the Y-Z play plane) |
-| `Public/OctoOdyssey/OctoGoalFlag.h` + `Private/` | `AOctoGoalFlag` — placeable overlap trigger, broadcasts `OnReached` |
-| `Public/OctoOdyssey/OctoSpawnPoint.h` + `Private/` | `AOctoSpawnPoint` — placeable spawn marker |
+| `Public/OctoOdyssey/OctoGoalFlag.h` + `Private/` | `AOctoGoalFlag` — placeable overlap trigger, tagged with its `EOctoCourse`, broadcasts `OnReached(Course)` |
+| `Public/OctoOdyssey/OctoSpawnPoint.h` + `Private/` | `AOctoSpawnPoint` — placeable spawn marker, tagged with its `EOctoCourse`; its X is that course's play plane |
 | `Private/OctoOdyssey/Tests/OctoArmMathTest.cpp` | `OctoArm::` unit tests |
 | `Private/OctoOdyssey/Tests/OctoBodySpringTest.cpp` | `OctoBody::` unit tests — the spring, the chain bend round trip, the squash |
 | `Private/OctoOdyssey/Tests/OctoSkeletonTest.cpp` | The guard rail on `/Game/OctoOdyssey/SK_Okto` — a re-export that breaks the rig fails here instead of mis-posing silently |
 | `Private/OctoOdyssey/Tests/OctoTuningTest.cpp` | Descriptor table, JSON and ini round trips |
-| `Private/OctoOdyssey/Tests/OctoRosterTest.cpp` | Roster slot-2 wiring guard |
+| `Private/OctoOdyssey/Tests/OctoScoresTest.cpp` | Ranking rules, ties, truncation, the name alphabet, time formatting, ini round trips |
 | `Game/Config/OctoTuning.ini` | The tuned values on disk, overlaid onto `FOctoTuning`'s defaults at startup |
-| `AI/build_octo_course.py` | Headless Python script that places the L_GameC greybox course (blocks, flag, spawn point, lights) — see its own docstring |
+| `Game/Config/OctoScores.ini` | The two top-ten tables on disk, overlaid onto the seeded defaults at startup |
+| `AI/build_octo_odyssey.py` | Headless Python script that builds L_OctoOdyssey — all three islands, both courses' spawn/flag actors, the menu view point, and the level's GameMode override |
+| `AI/build_octo_course.py` | The superseded single-course builder for L_GameC. Kept and still working; L_GameC is now a plain minigame slot |
 
 **The skeletal mesh is posed entirely in C++.** There is no Control Rig asset, no
 AnimBP and no authored animation: `AOctoPawn` holds a `UPoseableMeshComponent` and

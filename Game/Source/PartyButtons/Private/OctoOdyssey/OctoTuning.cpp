@@ -115,7 +115,10 @@ TArrayView<const FOctoTuningParam> OctoTuning::GetParams()
         FloatParam(TEXT("CameraFieldOfView"),      TEXT("Camera"),   &FOctoTuning::CameraFieldOfView,      30.f,  120.f,  2.5f),
 
         // ---- Course --------------------------------------------------------
-        FloatParam(TEXT("PlayPlaneX"),             TEXT("Course"),   &FOctoTuning::PlayPlaneX,          -2000.f, 2000.f, 50.f, true),
+        // Range reaches past the hard island (X ~= -6000): this is the fallback
+        // plane for a course with no spawn point placed, so it has to be able to
+        // name any island in the level.
+        FloatParam(TEXT("PlayPlaneX"),             TEXT("Course"),   &FOctoTuning::PlayPlaneX,          -8000.f, 2000.f, 50.f, true),
         FloatParam(TEXT("TutorialMaxSeconds"),     TEXT("Course"),   &FOctoTuning::TutorialMaxSeconds,      0.f,   15.f,  0.5f, true),
     };
 

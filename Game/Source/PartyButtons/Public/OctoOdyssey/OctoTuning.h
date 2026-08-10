@@ -363,9 +363,14 @@ struct PARTYBUTTONS_API FOctoTuning
     // ---- Course -----------------------------------------------------------
 
     /**
-     * World X the octopus is pinned to by its DOF lock, and the plane the camera
-     * frames. ONE value read by both AOctoGameMode and AOctoCamera — they used to
-     * hold independent copies that silently desynced if you edited only one.
+     * FALLBACK world X for the play plane — the X the octopus is pinned to by its
+     * DOF lock, and the plane the camera frames.
+     *
+     * It used to be THE plane, because there was one course in one map. There are
+     * now two courses stacked along X in a single level (see EOctoCourse), so the
+     * plane is a per-course fact and is read off that course's AOctoSpawnPoint.
+     * This value is only used when a course has no spawn point placed at all, and
+     * exists so a half-built level still puts the octopus somewhere visible.
      */
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Course")
     float PlayPlaneX = 0.f;

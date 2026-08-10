@@ -482,11 +482,15 @@ bool FPartyRosterGameModeOverride::RunTest(const FString& Parameters)
 
     // Slots with a bespoke GameMode instead of the shared APartyMinigameGameMode:
     //   0 (L_GameA / "Reflex Rumble")  -> APartyArenaGameMode
-    //   2 (L_GameC / "Octo Odyssey")   -> AOctoGameMode
-    // See APartyGameModeBase::TravelToGame. Written as a set (not two
-    // hardcoded slot checks) so a future slot 3, 4, ... needs no edit here —
-    // only the "every non-empty override is well-formed" checks below do.
-    const TSet<int32> ExpectedOverrideSlots = { 0, 2 };
+    // See APartyGameModeBase::TravelToGame. Written as a set (not a hardcoded
+    // slot check) so a future slot 2, 3, ... needs no edit here — only the
+    // "every non-empty override is well-formed" checks below do.
+    //
+    // Slot 2 used to override to AOctoGameMode. Octo Odyssey left this session to
+    // become a standalone game in its own level (see PartySessionState.cpp's
+    // comment on slot 2), and a GameMode that never declares a winner cannot be
+    // a roster entry.
+    const TSet<int32> ExpectedOverrideSlots = { 0 };
 
     for (int32 i = 0; i < S.GameRoster.Num(); i++)
     {

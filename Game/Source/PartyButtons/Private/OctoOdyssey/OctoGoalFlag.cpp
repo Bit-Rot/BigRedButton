@@ -47,7 +47,7 @@ AOctoGoalFlag::AOctoGoalFlag()
     {
         // RF_Transient: unlike PartyArena/PartyDuelPawn/PartyBullet (spawned
         // only at runtime, never saved), AOctoGoalFlag is placed directly
-        // into L_GameC and saved as part of the level. A constructor-created
+        // into L_OctoOdyssey and saved as part of the level. A constructor-created
         // UMaterialInstanceDynamic left non-transient fails SavePackage with
         // "Illegal reference to private object" (its auto-generated
         // WITH_EDITORONLY_DATA companion object resolves back to the CDO's
@@ -77,10 +77,10 @@ void AOctoGoalFlag::HandleBeginOverlap(
     bool bFromSweep,
     const FHitResult& SweepResult)
 {
-    if (bReached) { return; } // already fired — ignore further overlaps until the level reloads
+    if (bReached) { return; } // already fired — ignore further overlaps until ResetTrigger re-arms it
 
     if (!Cast<AOctoPawn>(OtherActor)) { return; }
 
     bReached = true;
-    OnReached.Broadcast();
+    OnReached.Broadcast(Course);
 }

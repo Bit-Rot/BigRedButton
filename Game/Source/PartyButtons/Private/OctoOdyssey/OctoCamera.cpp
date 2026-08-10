@@ -27,7 +27,16 @@ void AOctoCamera::BeginPlay()
         Tuning = TuningSubsystem->GetTuning();
     }
 
+    // The tuning value is only the SEED — AOctoGameMode overrides it per course
+    // straight after spawning us. See SetPlayPlaneX.
+    ActivePlaneX = Tuning.PlayPlaneX;
+
     ApplyLiveTuning(Tuning);
+}
+
+void AOctoCamera::SetPlayPlaneX(float InPlaneX)
+{
+    ActivePlaneX = InPlaneX;
 }
 
 void AOctoCamera::ApplyLiveTuning(const FOctoTuning& NewTuning)
@@ -45,18 +54,30 @@ void AOctoCamera::SetFollowTarget(AOctoPawn* Target)
     FollowTarget = Target;
 }
 
+FVector AOctoCamera::ComputeGoal() const
+{
+    const AOctoPawn* Target = FollowTarget.Get();
+    if (!Target) { return GetActorLocation(); }
+
+    const FVector P = Target->GetActorLocation();
+    return FVector(
+        ActivePlaneX - Tuning.CameraDistanceX,
+        P.Y + Tuning.LeadY,
+        FMath::Max(P.Z + Tuning.CameraHeightOffset, Tuning.MinCameraZ));
+}
+
+void AOctoCamera::SnapToTarget()
+{
+    if (!FollowTarget.IsValid()) { return; }
+
+    SetActorLocation(ComputeGoal());
+}
+
 void AOctoCamera::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
 
-    AOctoPawn* Target = FollowTarget.Get();
-    if (!Target) { return; }
+    if (!FollowTarget.IsValid()) { return; }
 
-    const FVector P = Target->GetActorLocation();
-    const FVector Goal(
-        Tuning.PlayPlaneX - Tuning.CameraDistanceX,
-        P.Y + Tuning.LeadY,
-        FMath::Max(P.Z + Tuning.CameraHeightOffset, Tuning.MinCameraZ));
-
-    SetActorLocation(FMath::VInterpTo(GetActorLocation(), Goal, DeltaSeconds, Tuning.FollowInterpSpeed));
+    SetActorLocation(FMath::VInterpTo(GetActorLocation(), ComputeGoal(), DeltaSeconds, Tuning.FollowInterpSpeed));
 }

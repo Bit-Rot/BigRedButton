@@ -1,76 +1,127 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "PartyMinigameGameMode.h"
+#include "PartyGameModeBase.h"
 #include "OctoOdyssey/OctoTuning.h"
+#include "OctoOdyssey/OctoTypes.h"
+#include "OctoOdyssey/OctoScores.h"
 #include "OctoGameMode.generated.h"
 
 class AOctoPawn;
 class AOctoCamera;
+class AOctoViewPoint;
 
 /**
  * AOctoGameMode
  *
- * GameMode for L_GameC ("Octo Odyssey", roster slot 2) — a QWOP-style co-op
- * physics game. Up to 8 players each control one arm of a single shared
- * AOctoPawn; button i extends arm i, releasing it retracts. Reaching the
- * goal flag (AOctoGoalFlag, placed in the level) reloads L_GameC so the
- * group starts over — this game does NOT call DeclareWinner/DeclareNoContest
- * and never rejoins the LevelSelect/Results flow (see ReloadCourse's
- * comment; this is deliberate, matching the spec's "loop forever").
+ * GameMode for L_OctoOdyssey — a QWOP-style co-op physics game where up to 8
+ * players each control one arm of a single shared AOctoPawn (button i extends
+ * arm i, releasing it retracts), racing a clock to a goal flag.
  *
- * Overrides the shared "first press wins" rule
- * (APartyMinigameGameMode::OnGameplayButton) entirely: every one of the first
- * 8 buttons always drives its arm, independent of Lobby registration
- * (bRequireRegistration defaults false) — with fewer than ~4 live arms the
- * course is uncompletable, and un-gating keeps L_GameC directly PIE-testable
- * via the dev keyboard mappings without going through the Lobby. Buttons
- * 8-15 are not used by this minigame.
+ * ---- What this class IS, and what it deliberately stopped being --------------
  *
- * Setup (BeginPlay, after Super::BeginPlay() resolves the roster entry for
- * the HUD):
- *   1. Find an AOctoSpawnPoint (falling back to FallbackSpawnLocation if
- *      absent) and spawn one AOctoPawn there, X forced to PlayPlaneX.
- *   2. Spawn an AOctoCamera, follow the octopus, and set it as the view
- *      target — the project never possesses pawns (see APartyDuelPawn's
- *      class comment), so this is the only way the player sees anything.
- *   3. Find an AOctoGoalFlag and bind its OnReached delegate to
- *      ReloadCourse(). Warns (doesn't fail) if the level has none placed.
- *   4. Spawn a fallback Movable directional light if the level has none,
- *      so a half-built map is still visible.
+ * OctoOdyssey used to be roster slot 2 of the 16-minigame party session: an
+ * APartyMinigameGameMode subclass that resolved itself from the session roster,
+ * ran the shared tutorial/countdown intro, and travelled back into
+ * LevelSelect/Results when it ended. It is now a self-contained GAME — its own
+ * menu, its own two courses, its own scoreboard — and derives straight from
+ * APartyGameModeBase instead. Three things forced that and are worth stating,
+ * because each one is a reason not to "just" put it back:
  *
- * Dev tuning menu (Tab, non-Shipping only):
- *   This game mode is the reference implementation of the generic dev menu on
- *   APartyGameModeBase. Tab opens a dialog listing every field of FOctoTuning;
- *   Up/Down select, Left/Right change, and the mouse can drag the sliders.
- *   Gameplay deliberately keeps RUNNING behind the dialog — a live preview of a
- *   damping or grip value is worthless if the octopus is frozen — and every
- *   change that can be applied without rebuilding the pawn is pushed straight
- *   through AOctoPawn/AOctoCamera::ApplyLiveTuning. Geometry can't be
- *   (see AOctoPawn's class comment), so Accept dumps the tuning as JSON to the
- *   log and reloads the course; Cancel (and Tab) just close. Every exit writes
- *   Config/OctoTuning.ini, so a tuning pass survives both the reload and closing
- *   the editor — and RESET TO DEFAULTS clears that file when a stale override
- *   starts masking a C++ default.
+ *   1. APartyMinigameGameMode::OnPlayerButton is FINAL and swallows every press
+ *      that isn't during live gameplay. A main menu and a name-entry screen both
+ *      live outside live gameplay, so under that base they could not be typed
+ *      into at all.
+ *   2. DeclareWinner/DeclareNoContest record a win against a session and travel
+ *      away. This game has no session and nowhere to travel to: it is one level.
+ *   3. The intro overlay assumes it runs once, at BeginPlay. Here a run starts
+ *      when a player picks it out of a menu, any number of times per launch.
  *
- * AI is deliberately NOT implemented (no TickAI override — the empty
- * default from APartyMinigameGameMode already IS "AI does nothing", no
- * opt-out needed). Reflex Rumble's AI fills an OPPOSING slot, so weak AI is
- * just a weak opponent; here every arm drives the SAME shared body, so an
- * AI holding arms that fight the humans' intent is actively worse than no
- * AI at all. A QWOP octopus also needs real locomotion planning (contact-
- * phase detection, gait sequencing) to be anything but noise — out of scope
- * for a first pass.
+ * THERE IS NO MAP TRAVEL IN THIS GAME. Menu island, normal course and hard
+ * course are three places in ONE level (stacked along -X — see EOctoCourse), and
+ * moving between them is a camera blend, not an OpenLevel. That is what makes
+ * the flow instant and what lets the scoreboard live in memory between runs.
+ *
+ * ---- Flow --------------------------------------------------------------------
+ *
+ *   MainMenu    Fixed camera on the menu island (the placed AOctoViewPoint), no
+ *               octopus in the world. Any player button cycles the three options;
+ *               the main button taps to choose.
+ *   Playing     The chosen course's AOctoSpawnPoint spawns an octopus, an
+ *               AOctoCamera follows it, the view blends across, and the clock
+ *               runs. Deliberately no countdown and no tutorial: menu -> spawn ->
+ *               play, straight through.
+ *   ScoreEntry  Reaching that course's flag stops the clock, tears the octopus
+ *               down, blends back to the island and shows the table with the
+ *               player's row editable IN PLACE. Player i owns letter i; a tap
+ *               advances it, a hold repeats. The main button held for a second
+ *               commits (see AOctoPlayerController for that second).
+ *   ScoreView   Both tables side by side, read-only. Main button returns.
+ *
+ * ---- Location comes from the level, not from code ----------------------------
+ *
+ * Every position that decides WHERE something happens is an actor the user can
+ * drag in the editor: AOctoSpawnPoint (per course), AOctoGoalFlag (per course),
+ * AOctoViewPoint (the menu shot). A course's spawn point X is also the play
+ * plane for that course — the octopus is pinned to it and the camera frames it —
+ * so the two can never disagree (see AOctoCamera::SetPlayPlaneX).
+ *
+ * ---- Dev tuning menu (Tab, non-Shipping only) --------------------------------
+ *
+ * Unchanged, and still the reference implementation of the generic dev menu on
+ * APartyGameModeBase: Tab lists every field of FOctoTuning, Up/Down select,
+ * Left/Right change, the mouse can drag the sliders, and gameplay keeps RUNNING
+ * behind the dialog because a live preview of a damping value is worthless if the
+ * octopus is frozen. Values that can't be applied live (geometry) take effect on
+ * ACCEPT, which now RESPAWNS THE OCTOPUS rather than reloading the level — same
+ * result, no travel. Every exit writes Config/OctoTuning.ini.
+ *
+ * AI is deliberately NOT implemented. Every arm drives the SAME shared body, so
+ * an AI holding arms that fight the humans' intent is actively worse than no AI
+ * at all.
  */
 UCLASS()
-class PARTYBUTTONS_API AOctoGameMode : public APartyMinigameGameMode
+class PARTYBUTTONS_API AOctoGameMode : public APartyGameModeBase
 {
     GENERATED_BODY()
 
 public:
     AOctoGameMode();
 
+    virtual FString GetHudTitle() const override { return TEXT("OCTO ODYSSEY"); }
     virtual FString GetHudSubtitle() const override;
+
+    // ---- State, read by AOctoHUD ---------------------------------------------
+    //
+    // These live here rather than as virtuals on APartyGameModeBase because they
+    // are Octo-specific: AOctoHUD casts to this class, so the shared base does not
+    // grow a menu-selection or scoreboard concept it has no other use for.
+
+    EOctoFlowState GetFlowState()   const { return FlowState; }
+    EOctoCourse    GetActiveCourse() const { return ActiveCourse; }
+
+    /** Highlighted menu row, 0..NumMenuOptions-1. Also drives APartyGameModeBase::GetSelectionIndex. */
+    virtual int32 GetSelectionIndex() const override { return MenuSelection; }
+
+    static constexpr int32 NumMenuOptions = 3;
+
+    /** Menu row labels, in order. Owned here so the HUD never re-declares them. */
+    static const TCHAR* GetMenuOptionLabel(int32 OptionIndex);
+
+    /**
+     * Seconds on the clock: counting up while Playing, frozen at the finish time
+     * on the score screens, 0 in the menu.
+     */
+    float GetRunSeconds() const;
+
+    /** Where the just-finished run lands in its table, or INDEX_NONE if it missed the top ten. */
+    int32 GetPendingRank() const { return PendingRank; }
+
+    /** The eight-character name being typed. Always OctoScores::NameLength long. */
+    const FString& GetPendingName() const { return PendingName; }
+
+    /** A course's live table, or an empty one if the score subsystem is unavailable. */
+    const TArray<FOctoScoreEntry>& GetScoreTable(EOctoCourse Course) const;
 
     // ---- Dev tuning menu, consumed by APartyFlowHUD::DrawDevMenu -------------
     virtual bool                     GetDevMenuOpen() const override { return bDevMenuOpen; }
@@ -83,17 +134,19 @@ public:
 
 protected:
     virtual void BeginPlay() override;
+    virtual void Tick(float DeltaSeconds) override;
     virtual void PostLogin(APlayerController* NewPlayer) override;
-    virtual void OnGameplayButton(int32 PlayerIndex) override;
-    virtual void OnGameplayButtonReleased(int32 PlayerIndex) override;
-    // Deliberately no TickAI override — see class comment.
 
-    /**
-     * The octopus genuinely simulates physics, so the base's tick-suspension
-     * idea doesn't apply — SetActorTickEnabled would stop the arms but let the
-     * body keep falling. Stops the simulation instead (see AOctoPawn::SetPhysicsFrozen).
-     */
-    virtual void SetGameplayFrozen(bool bFrozen) override;
+    // ---- Input ---------------------------------------------------------------
+    //
+    // All four route through the FlowState switch. Nothing here is final and
+    // nothing is gated on an intro phase — that gating is precisely what this
+    // class left behind (see the class comment).
+
+    virtual void OnPlayerButton(int32 PlayerIndex) override;
+    virtual void OnPlayerButtonReleased(int32 PlayerIndex) override;
+    virtual void OnMainTap() override;
+    virtual void OnMainHold() override;
 
     /** Tab: open/close the tuning dialog. Never fires in Shipping — see APartyInputController::OnDevMenu. */
     virtual void OnDevMenuToggle() override;
@@ -106,13 +159,6 @@ protected:
     virtual void OnDevLeft() override;
     virtual void OnDevRight() override;
 
-    /** A button held through the countdown means "extend that arm" — honour it the instant play starts. */
-    virtual bool ShouldReplayHeldButtonsOnStart() const override { return true; }
-
-    // Deliberately no GetPawnMarkers override: the discovery phase labels one
-    // pawn per player, and this game has ONE shared body for all eight. The
-    // countdown still runs (it's the "GO!" signal) — just without labels.
-
     UPROPERTY(EditDefaultsOnly, Category = "Octo")
     TSubclassOf<AOctoPawn> OctoPawnClass;
 
@@ -121,76 +167,95 @@ protected:
 
     /**
      * Course-level tunables, pulled from UOctoTuningSubsystem in BeginPlay and
-     * edited in place by the dev menu. The play plane lives in here rather than
-     * as its own property because AOctoCamera needs the same number — they used
-     * to be two independent copies that silently desynced.
+     * edited in place by the dev menu.
      */
     FOctoTuning Tuning;
 
-    /** Used only if no AOctoSpawnPoint is placed in the level. */
+    /** Used only if the chosen course has no AOctoSpawnPoint placed. */
     UPROPERTY(EditDefaultsOnly, Category = "Octo")
     FVector FallbackSpawnLocation = FVector(0.f, 300.f, 200.f);
 
-    /** Used only if the roster lookup fails (e.g. L_GameC opened directly with no session). */
+    /** Seconds the view takes to cross between the menu camera and a course camera. */
     UPROPERTY(EditDefaultsOnly, Category = "Octo")
-    FName FallbackMapName = TEXT("L_GameC");
+    float ViewBlendSeconds = 1.0f;
 
-    /**
-     * If true, OnGameplayButton/OnGameplayButtonReleased ignore unregistered
-     * players (matching APartyMinigameGameMode's default gating). Defaults
-     * false — see class comment for why this minigame un-gates deliberately.
-     */
-    UPROPERTY(EditDefaultsOnly, Category = "Octo")
-    bool bRequireRegistration = false;
+    /** How long a name-entry button must be held before its letter starts auto-advancing. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Name Entry")
+    float NameHoldDelaySeconds = 0.4f;
+
+    /** Letters per second while held. Fast enough to cross the alphabet in ~5s, slow enough to stop on one. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Name Entry")
+    float NameHoldRepeatHz = 7.f;
 
     /** Spawn a Movable directional light if the level has none — keeps a half-built map visible. */
     UPROPERTY(EditDefaultsOnly, Category = "Octo")
     bool bSpawnFallbackLight = true;
 
 private:
-    void SpawnOctopus();
-    void SpawnCamera();
-    void BindGoalFlag();
-    void MaybeSpawnFallbackLight();
+    // ---- Flow ----------------------------------------------------------------
 
-    /** Declares who the tutorial's "all humans holding" ready check waits on. */
-    void RegisterArmParticipants();
+    /** Spawn the octopus and its camera on Course, blend the view over, start the clock. */
+    void EnterCourse(EOctoCourse Course);
 
-    /** Bound to AOctoGoalFlag::OnReached. */
-    void HandleGoalReached();
+    /** Destroy the octopus and its camera, blend back to the menu view point. */
+    void LeaveCourse();
+
+    /** Blend to the menu island and show the menu. Shared exit from every other state. */
+    void ReturnToMenu();
+
+    /** Bound to every AOctoGoalFlag::OnReached. */
+    void HandleGoalReached(EOctoCourse Course);
+
+    /** Commit PendingName into the table for ActiveCourse (if it qualified) and go back to the menu. */
+    void CommitPendingScore();
 
     /**
-     * Reload L_GameC (or the roster-resolved map, if this instance is
-     * running as part of a session) with THIS GameMode, forever — see class
-     * comment. Deliberately does NOT go through DeclareWinner/
-     * DeclareNoContest/TravelToPhase/TravelToGame: none of the existing
-     * travel helpers reopen the CURRENT map with the right GameMode without
-     * also mutating session state (TravelToGame) or having no route for a
-     * specific game map (TravelToPhase). The ?game= option is mandatory —
-     * without it, reopening L_GameC falls back to GlobalDefaultGameMode
-     * SILENTLY (see PartyFlowRouter.h's pitfall comment).
+     * Rebuild the octopus in place, for tuning that can only be applied at spawn
+     * (geometry — see AOctoPawn's class comment). Replaces the old ReloadCourse():
+     * same effect, no OpenLevel, and the scoreboard survives.
      */
-    void ReloadCourse();
+    void RestartRun();
 
-    /** Read Tuning from the subsystem and apply the bits this GameMode owns (gravity, tutorial length). */
-    void LoadAndApplyCourseTuning();
+    /** Act on the highlighted menu row. */
+    void ActivateMenuOption();
+
+    // ---- Level queries -------------------------------------------------------
+
+    AOctoViewPoint* FindMenuViewPoint() const;
+
+    /** Spawn location for Course, X included — that X is the course's play plane. */
+    FVector FindSpawnLocation(EOctoCourse Course) const;
+
+    /** Bind EVERY goal flag, not just the first: there is one per course. */
+    void BindGoalFlags();
+
+    void MaybeSpawnFallbackLight();
+
+    /** Point the view at Target, blending unless bImmediate. Safe with a null Target. */
+    void SetViewTo(AActor* Target, bool bImmediate);
+
+    // ---- Name entry ----------------------------------------------------------
+
+    /** Advance letter LetterIndex by one glyph. No-op unless the run actually placed. */
+    void CycleNameLetter(int32 LetterIndex);
+
+    /** Per-button hold state, so a held button auto-advances its own letter. */
+    struct FLetterHold
+    {
+        float Elapsed      = 0.f;
+        float NextRepeatAt = 0.f;
+    };
+
+    void TickNameEntry(float DeltaSeconds);
 
     // ---- Dev tuning menu ------------------------------------------------------
 
-    /** Store the edited tuning and push everything live-appliable into the pawn and camera. */
     void PushLiveTuning();
-
-    /** Move the selection by Delta, skipping header rows. No-op when the menu is closed. */
     void MoveDevMenuSelection(int32 Delta);
-
-    /** Change the selected row's value by Direction (-1/+1) and push it live. */
     void NudgeDevMenuSelection(int32 Direction);
-
-    /** Show/hide the cursor and swap input mode. Keeps the keyboard on gameplay either way. */
     void SetDevMenuInputMode(bool bMenuOpen);
-
-    /** Shared exit path for Tab, Accept and Cancel: restore input and write the ini. */
     void CloseDevMenu();
+    void LoadAndApplyCourseTuning();
 
     /**
      * Row indices are menu-space (headers included) while OctoTuning::GetParams
@@ -199,8 +264,10 @@ private:
      */
     int32 DevMenuRowToParamIndex(int32 RowIndex) const;
 
-    /** Menu-space index of the Accept row. Cancel is the one after it. */
+    /** Menu-space index of the Accept row. Reset is the one after it, Cancel after that. */
     int32 GetDevMenuAcceptRowIndex() const;
+
+    // ---- State ---------------------------------------------------------------
 
     UPROPERTY()
     TObjectPtr<AOctoPawn> Octo;
@@ -208,9 +275,24 @@ private:
     UPROPERTY()
     TObjectPtr<AOctoCamera> Camera;
 
-    /** Guards against multiple overlaps in one frame stacking up travel calls. */
-    bool bReloading = false;
+    UPROPERTY()
+    TObjectPtr<AOctoViewPoint> MenuViewPoint;
 
-    bool  bDevMenuOpen    = false;
+    EOctoFlowState FlowState    = EOctoFlowState::MainMenu;
+    EOctoCourse    ActiveCourse = EOctoCourse::Normal;
+    int32          MenuSelection = 0;
+
+    /** World time the current run started. Only meaningful while Playing. */
+    float RunStartTime = 0.f;
+
+    /** The finished run's time, held for the score screens. */
+    float FinishedSeconds = 0.f;
+
+    int32   PendingRank = INDEX_NONE;
+    FString PendingName;
+
+    TMap<int32, FLetterHold> LetterHolds;
+
+    bool  bDevMenuOpen     = false;
     int32 DevMenuSelection = 0;
 };

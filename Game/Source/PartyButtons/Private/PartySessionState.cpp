@@ -49,11 +49,17 @@ void FPartySessionState::InitDefaultRoster()
     // no 'A' prefix (see AI/design/architecture.md travel-wiring pitfall).
     GameRoster[0].GameModeClassPath = TEXT("/Script/PartyButtons.PartyArenaGameMode");
 
-    // Slot 2 (L_GameC / "Octo Odyssey") is the second real minigame — a
-    // QWOP-style co-op physics game — and likewise overrides the shared
-    // GameMode. Reflected class name, no 'A' prefix (same pitfall as above).
-    GameRoster[2].DisplayName        = TEXT("Octo Odyssey");
-    GameRoster[2].GameModeClassPath  = TEXT("/Script/PartyButtons.OctoGameMode");
+    // Slot 2 deliberately carries NO GameMode override any more.
+    //
+    // It used to point at AOctoGameMode, back when Octo Odyssey was a minigame in
+    // this session. Octo Odyssey is now a standalone game with its own level,
+    // menu and scoreboard (L_OctoOdyssey — see AOctoGameMode's class comment) and
+    // AOctoGameMode no longer derives from APartyMinigameGameMode at all, so it
+    // cannot serve a roster slot: it would never declare a winner and never
+    // return to LevelSelect, hanging the session on that map forever.
+    //
+    // L_GameC keeps its greybox course and falls back to the shared
+    // "first press wins" APartyMinigameGameMode like the other placeholder slots.
 }
 
 void FPartySessionState::ResetSession()

@@ -33,24 +33,17 @@ class PARTYBUTTONS_API APartyFlowHUD : public AHUD
 protected:
     virtual void DrawHUD() override;
 
-private:
     // ---- Helpers -------------------------------------------------------
+    //
+    // Protected, not private, so a per-game HUD can reuse them. AOctoHUD is the
+    // first: OctoOdyssey draws its own menu/scoreboard screens but still wants the
+    // shared text centring and the shared dev-tuning overlay, and copying either
+    // into a subclass would guarantee they drift.
 
     UPartySessionSubsystem* GetSession()  const;
     APartyGameModeBase*     GetFlowGM()   const;
 
-    // ---- Per-phase draw functions (each null-guards its own data needs) ---
-
-    void DrawMainMenu(APartyGameModeBase* GM);
-    void DrawSettings(APartyGameModeBase* GM);
-    void DrawLobby(APartyGameModeBase* GM);
-    void DrawLevelSelect(APartyGameModeBase* GM, const FPartySessionState& State);
-    void DrawMinigame(APartyGameModeBase* GM);
-    void DrawResults(const FPartySessionState& State);
-
-    // Intro-overlay draw paths for minigames that opt in via GetOverlayPhase.
-    void DrawTutorialDialog(APartyGameModeBase* GM);
-    void DrawPawnMarkers(APartyGameModeBase* GM);
+    void DrawCenteredText(const FString& Text, float Y, FLinearColor Color, float Scale = 1.0f);
 
     /**
      * Dev tuning menu (Tab). Drawn OVER whatever phase is active, from the rows
@@ -63,6 +56,20 @@ private:
      * GameMode. Clicks and drags are routed back through the GameMode's setters.
      */
     void DrawDevMenu(APartyGameModeBase* GM);
+
+private:
+    // ---- Per-phase draw functions (each null-guards its own data needs) ---
+
+    void DrawMainMenu(APartyGameModeBase* GM);
+    void DrawSettings(APartyGameModeBase* GM);
+    void DrawLobby(APartyGameModeBase* GM);
+    void DrawLevelSelect(APartyGameModeBase* GM, const FPartySessionState& State);
+    void DrawMinigame(APartyGameModeBase* GM);
+    void DrawResults(const FPartySessionState& State);
+
+    // Intro-overlay draw paths for minigames that opt in via GetOverlayPhase.
+    void DrawTutorialDialog(APartyGameModeBase* GM);
+    void DrawPawnMarkers(APartyGameModeBase* GM);
 
     /**
      * Draw the 4×4 grid of tiles.
@@ -78,8 +85,6 @@ private:
         TFunctionRef<bool(int32)>    IsAI,
         TFunctionRef<FString(int32)> GetLabel,
         int32                        HighlightIndex = INDEX_NONE);
-
-    void DrawCenteredText(const FString& Text, float Y, FLinearColor Color, float Scale = 1.0f);
 
     // Tracks last phase that was logged so we only log on phase transitions.
     mutable EPartyPhase LastLoggedPhase = EPartyPhase::Main;
