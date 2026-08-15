@@ -35,7 +35,7 @@ namespace
     }
 
     /** A scratch ini path unique to the running test, cleaned up by the caller. */
-    FString MakeScratchIniPath(const TCHAR* Tag)
+    FString MakeScoresScratchIniPath(const TCHAR* Tag)
     {
         return FPaths::ConvertRelativePathToFull(
             FPaths::Combine(FPaths::AutomationTransientDir(),
@@ -232,7 +232,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FOctoScoresIniRoundTrips::RunTest(const FString& Parameters)
 {
-    const FString IniPath = MakeScratchIniPath(TEXT("RoundTrip"));
+    const FString IniPath = MakeScoresScratchIniPath(TEXT("RoundTrip"));
     IFileManager::Get().Delete(*IniPath);
 
     // ---- Save ------------------------------------------------------------
@@ -291,7 +291,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FOctoScoresIniIsPerCourseAndSorted::RunTest(const FString& Parameters)
 {
-    const FString IniPath = MakeScratchIniPath(TEXT("PerCourse"));
+    const FString IniPath = MakeScoresScratchIniPath(TEXT("PerCourse"));
     IFileManager::Get().Delete(*IniPath);
 
     // Write ONLY the normal course, then load into a pair of default tables. The

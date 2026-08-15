@@ -254,7 +254,7 @@ bool FOctoTuningJsonContainsEveryParam::RunTest(const FString& Parameters)
 namespace
 {
     /** A scratch ini path unique to the running test, cleaned up by the caller. */
-    FString MakeScratchIniPath(const TCHAR* Tag)
+    FString MakeTuningScratchIniPath(const TCHAR* Tag)
     {
         return FPaths::ConvertRelativePathToFull(
             FPaths::Combine(FPaths::AutomationTransientDir(),
@@ -269,7 +269,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FOctoTuningIniRoundTrips::RunTest(const FString& Parameters)
 {
-    const FString IniPath = MakeScratchIniPath(TEXT("RoundTrip"));
+    const FString IniPath = MakeTuningScratchIniPath(TEXT("RoundTrip"));
     IFileManager::Get().Delete(*IniPath);
 
     // ---- Save ------------------------------------------------------------
@@ -337,7 +337,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FOctoTuningIniOverlaysDefaults::RunTest(const FString& Parameters)
 {
-    const FString IniPath = MakeScratchIniPath(TEXT("Overlay"));
+    const FString IniPath = MakeTuningScratchIniPath(TEXT("Overlay"));
     IFileManager::Get().Delete(*IniPath);
 
     // ---- A missing file changes nothing ----------------------------------
