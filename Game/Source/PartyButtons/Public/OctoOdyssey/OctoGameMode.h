@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "PartyGameModeBase.h"
+#include "OctoOdyssey/OctoRespawn.h"
 #include "OctoOdyssey/OctoTuning.h"
 #include "OctoOdyssey/OctoTypes.h"
 #include "OctoOdyssey/OctoScores.h"
@@ -9,6 +10,7 @@
 
 class AOctoPawn;
 class AOctoCamera;
+class AOctoCheckpoint;
 class AOctoViewPoint;
 
 /**
@@ -58,13 +60,34 @@ class AOctoViewPoint;
  *               commits (see AOctoPlayerController for that second).
  *   ScoreView   Both tables side by side, read-only. Main button returns.
  *
+ * ---- Dying and checkpoints ---------------------------------------------------
+ *
+ * A run can kill the octopus without ending: touching an AOctoKillVolume, or
+ * falling below the course's AOctoKillFloor, respawns it at the last
+ * AOctoCheckpoint it touched — or at the course's AOctoSpawnPoint if it has
+ * touched none.
+ *
+ * THE CLOCK DOES NOT STOP AND DOES NOT RESET. Dying costs time, not the run.
+ * This game's only score is a finishing time, so a death that reset the clock
+ * would make the top ten a table of runs that never died, and a death that ended
+ * the run would put a QWOP octopus back on the main menu several times a minute.
+ * Losing the seconds it takes to climb back is punishment enough and is the one
+ * that shows up on the scoreboard.
+ *
+ * All three hazards funnel through KillOcto -> RespawnOcto, which is a PAWN
+ * swap, not a course restart: the camera, the clock and the checkpoint survive.
+ * That is the difference between it and RestartRun (the dev menu's respawn),
+ * which rebuilds the run from EnterCourse.
+ *
  * ---- Location comes from the level, not from code ----------------------------
  *
  * Every position that decides WHERE something happens is an actor the user can
  * drag in the editor: AOctoSpawnPoint (per course), AOctoGoalFlag (per course),
- * AOctoViewPoint (the menu shot). A course's spawn point X is also the play
- * plane for that course — the octopus is pinned to it and the camera frames it —
- * so the two can never disagree (see AOctoCamera::SetPlayPlaneX).
+ * AOctoCheckpoint and AOctoKillVolume (any number per course), AOctoViewPoint
+ * (the menu shot). A course's spawn point X is also the play plane for that
+ * course — the octopus is pinned to it and the camera frames it — so the two can
+ * never disagree (see AOctoCamera::SetPlayPlaneX). Checkpoints are forced onto
+ * that same plane on respawn for the same reason.
  *
  * ---- Dev tuning menu (Tab, non-Shipping only) --------------------------------
  *
@@ -179,6 +202,27 @@ protected:
     UPROPERTY(EditDefaultsOnly, Category = "Octo")
     float ViewBlendSeconds = 1.0f;
 
+    /**
+     * Used when the active course has no AOctoKillFloor placed, so an octopus can
+     * never fall forever in a course nobody has finished dressing.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Respawn")
+    float FallbackKillFloorZ = OctoRespawn::DefaultKillFloorZ;
+
+    /**
+     * How long after a respawn the octopus cannot be killed again.
+     *
+     * Not an invulnerability mechanic — it is a rate limit on a level-design
+     * mistake. A checkpoint whose arrow sits inside a kill volume (or below the
+     * kill floor) is an infinite death loop: the respawned pawn registers its
+     * overlap the moment it exists, dies, and respawns into the same spot. This
+     * turns "unplayable and a flooded log" into "twice a second, with a warning
+     * per death saying exactly where" — enough to see the mistake and still hold
+     * the main button to abandon the run.
+     */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Respawn")
+    float RespawnGraceSeconds = 0.5f;
+
     /** How long a name-entry button must be held before its letter starts auto-advancing. */
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Name Entry")
     float NameHoldDelaySeconds = 0.4f;
@@ -206,6 +250,35 @@ private:
     /** Bound to every AOctoGoalFlag::OnReached. */
     void HandleGoalReached(EOctoCourse Course);
 
+    // ---- Dying ---------------------------------------------------------------
+
+    /** Bound to every AOctoKillVolume::OnTouched. */
+    void HandleKillVolumeTouched(EOctoCourse Course);
+
+    /** Bound to every AOctoCheckpoint::OnReached. Latest-wins — see AOctoCheckpoint. */
+    void HandleCheckpointReached(AOctoCheckpoint* Checkpoint);
+
+    /**
+     * End the octopus's life and queue its return. Reason is log text only.
+     *
+     * Collapses every duplicate the hazards throw at it — several shapes on one
+     * volume, several volumes at once, a volume and the kill floor on the same
+     * frame — into ONE respawn, which is why AOctoKillVolume deliberately has no
+     * latch of its own. Safe to call from inside an overlap callback: the
+     * teardown is deferred a tick for the same reason HandleGoalReached defers
+     * its own.
+     */
+    void KillOcto(const TCHAR* Reason);
+
+    /** Swap in a fresh pawn at FindRespawnLocation. Keeps the camera, the clock and the checkpoint. */
+    void RespawnOcto();
+
+    /** The active checkpoint's arrow, or the course start, forced onto the play plane. */
+    FVector FindRespawnLocation() const;
+
+    /** Per-frame Z test against the active course's kill floor. Playing state only. */
+    void TickKillFloor();
+
     /** Commit PendingName into the table for ActiveCourse (if it qualified) and go back to the menu. */
     void CommitPendingScore();
 
@@ -228,6 +301,16 @@ private:
 
     /** Bind EVERY goal flag, not just the first: there is one per course. */
     void BindGoalFlags();
+
+    /**
+     * Bind every AOctoKillVolume and AOctoCheckpoint in the level. Unlike the
+     * goal flags, finding none is not worth a warning — a course with no hazards
+     * and no checkpoints is a legitimate course.
+     */
+    void BindHazards();
+
+    /** KillZ of the first AOctoKillFloor tagged Course, or FallbackKillFloorZ if none is placed. */
+    float FindKillFloorZ(EOctoCourse Course) const;
 
     void MaybeSpawnFallbackLight();
 
@@ -281,6 +364,25 @@ private:
     EOctoFlowState FlowState    = EOctoFlowState::MainMenu;
     EOctoCourse    ActiveCourse = EOctoCourse::Normal;
     int32          MenuSelection = 0;
+
+    /**
+     * The last checkpoint touched this run, or null for "none yet". Weak because
+     * the level owns it and nothing here should keep a destroyed one alive.
+     * Cleared by EnterCourse — a checkpoint is a fact about a run, not a save.
+     */
+    TWeakObjectPtr<AOctoCheckpoint> ActiveCheckpoint;
+
+    /** Where this run began, which is also the respawn until a checkpoint is touched. Its X is the play plane. */
+    FVector CourseStartLocation = FVector::ZeroVector;
+
+    /** Resolved once per run in EnterCourse rather than searched every frame. */
+    float ActiveKillFloorZ = OctoRespawn::DefaultKillFloorZ;
+
+    /** World time until which kills are ignored — see RespawnGraceSeconds. */
+    float RespawnSafeUntilTime = 0.f;
+
+    /** A kill has been registered and its respawn is queued for next tick. Collapses duplicates. */
+    bool bRespawnPending = false;
 
     /** World time the current run started. Only meaningful while Playing. */
     float RunStartTime = 0.f;

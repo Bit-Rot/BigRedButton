@@ -33,8 +33,9 @@ duplicates. The corollary is that hand-edits made in the editor to a tagged acto
 are LOST on the next run: move the numbers here, not just the gizmo.
 
 Prerequisite: the PartyButtons module must be compiled. This script spawns
-unreal.OctoGoalFlag, unreal.OctoSpawnPoint and unreal.OctoViewPoint, whose Python
-bindings only exist once those UCLASS()-reflected C++ classes have built.
+unreal.OctoGoalFlag, unreal.OctoSpawnPoint, unreal.OctoViewPoint,
+unreal.OctoCheckpoint, unreal.OctoKillVolume and unreal.OctoKillFloor, whose
+Python bindings only exist once those UCLASS()-reflected C++ classes have built.
 
 Run via:
   UnrealEditor-Cmd.exe <uproject> -run=pythonscript -script=<this file>
@@ -184,6 +185,70 @@ NORMAL_FLAG  = ("GoalFlag_Normal",  (0.0, 5900.0, 200.0), (0.0, 0.0, 0.0))
 HARD_SPAWN = ("OctoSpawn_Hard", (0.0, 300.0, 200.0),  (0.0, 0.0, 0.0))
 HARD_FLAG  = ("GoalFlag_Hard",  (0.0, 6700.0, 800.0), (0.0, 0.0, 0.0))
 
+# ---------------------------------------------------------------------------
+# Checkpoints and hazards
+#
+# (label, local location, half-extent). Local X is 0 — the same plane as the
+# course's spawn point — and the X HALF-EXTENT is what covers the octopus's
+# depth: SK_Okto's head sphere sits ~85cm out of the play plane toward the
+# camera, and the blocks reach from local X -125 to 400, so 400 spans the lot.
+#
+# A checkpoint respawns at its ARROW, which these place at the actor origin.
+# Every one below therefore sits a comfortable drop ABOVE the surface the player
+# is expected to be standing on, not level with it — respawning inside a block
+# is a physics ejection, not a respawn. Drag the arrow off the box in the editor
+# to separate the two.
+#
+# CHECKPOINTS ARE LATEST-TOUCHED, NOT FURTHEST-REACHED (see AOctoCheckpoint), so
+# spacing them is a design call: too dense and backtracking one metre undoes
+# progress, too sparse and a death costs a minute of climbing.
+# ---------------------------------------------------------------------------
+
+NORMAL_CHECKPOINTS = [
+    ("CP_Normal_Plateau", (0.0, 2500.0, 400.0), (400.0, 100.0, 500.0)),  # Plateau top is Z 200
+    ("CP_Normal_Boxes",   (0.0, 4300.0, 500.0), (400.0, 100.0, 500.0)),  # Box_B top is Z 300
+]
+
+HARD_CHECKPOINTS = [
+    ("CP_Hard_Plateau", (0.0, 2700.0, 650.0), (400.0, 100.0, 500.0)),  # H_HighPlateau top is Z 450
+    ("CP_Hard_Ledge",   (0.0, 3600.0, 650.0), (400.0, 100.0, 500.0)),  # H_Ledge top is Z 450 — the far side of the gap
+    ("CP_Hard_Stairs",  (0.0, 5000.0, 400.0), (400.0, 100.0, 600.0)),  # H_Stair_1 top is Z 200
+]
+
+# THESE CHANGE HOW THE COURSES PLAY, and both are one line to delete.
+#
+# The normal course's pit used to be a soft landing — its PitFloor is a metre
+# below the ground line and you could climb back out. This makes it lethal, on
+# the grounds that a pit you can sit in is not an obstacle. The floor is still
+# there to land on; it just kills now.
+#
+# The hard course's gap already had no floor at all, so falling in meant a long
+# drop to the kill floor. This shortens that to about half a second.
+NORMAL_KILL_VOLUMES = [
+    ("Kill_Normal_Pit", (0.0, 3400.0, -50.0), (400.0, 200.0, 50.0)),  # sits on PitFloor's Z -100 surface
+]
+
+HARD_KILL_VOLUMES = [
+    ("Kill_Hard_Gap", (0.0, 3225.0, 0.0), (400.0, 225.0, 400.0)),  # spans Y 3000..3450, under both ledges
+]
+
+# (label, local location). KillZ is deliberately LEFT AT THE C++ DEFAULT
+# (OctoRespawn::DefaultKillFloorZ, -10000) — this is the "fell out of the world"
+# catcher, not a hazard, and leaving it unset here means changing that default in
+# C++ actually reaches the level.
+#
+# The cost of that default is a ~4.5-second fall before the respawn, which is
+# dead time on a running clock. If that becomes annoying, set kill_z on these to
+# a few hundred below the lowest block (about -1500 for the normal course, -1000
+# for the hard one) — but note the hazards above are what catch the two falls a
+# player actually makes, so this only fires when the octopus leaves the level
+# sideways.
+#
+# The actor's own POSITION means nothing to gameplay; it is placed under the
+# start of each course purely so it is findable in the viewport.
+NORMAL_KILL_FLOOR = ("KillFloor_Normal", (0.0, 300.0, -600.0))
+HARD_KILL_FLOOR   = ("KillFloor_Hard",   (0.0, 300.0, -600.0))
+
 # The menu camera. Local X is negative because the camera stands OFF the island,
 # in front of it, looking back along +X — which is also the direction the normal
 # course lies in, so the course fills the background. Identity rotation looks +X;
@@ -262,8 +327,33 @@ def spawn_light(actor_subsystem, label, location, rotation, intensity):
     return light
 
 
-def build_course(actor_subsystem, cube_mesh, island_x, blocks, spawn, flag, course_enum, suffix):
-    """One playable island: its geometry, its spawn point and its goal flag."""
+def spawn_trigger_volume(actor_subsystem, actor_class, label, location, extent, course_enum):
+    """
+    One AOctoTriggerVolume subclass — a checkpoint or a kill volume.
+
+    Setting trigger_extent goes through PostEditChangeProperty, which re-runs
+    AOctoTriggerVolume::OnConstruction and pushes the new half-extent into the
+    box. Without that round trip the actor would save with its class-default box
+    and the number written above would be a lie.
+
+    Extra colliders are an EDITOR-ONLY affordance by design (see
+    AOctoTriggerVolume): if one of these needs a second box, add it in the
+    Details panel — but remember this script destroys and rebuilds every tagged
+    actor, so a hand-added component is lost on the next run just like a gizmo
+    nudge is.
+    """
+    actor = spawn_class(actor_subsystem, actor_class, label, location, (0.0, 0.0, 0.0))
+    if not actor:
+        return None
+
+    actor.set_editor_property("course", course_enum)
+    actor.set_editor_property("trigger_extent", unreal.Vector(*extent))
+    return actor
+
+
+def build_course(actor_subsystem, cube_mesh, island_x, blocks, spawn, flag, course_enum, suffix,
+                 checkpoints, kill_volumes, kill_floor):
+    """One playable island: its geometry, its spawn point, its goal flag and its hazards."""
     spawned = 0
 
     for label, location, rotation, scale in blocks:
@@ -284,6 +374,23 @@ def build_course(actor_subsystem, cube_mesh, island_x, blocks, spawn, flag, cour
     flag_actor = spawn_class(actor_subsystem, unreal.OctoGoalFlag, label, offset(location, island_x), rotation)
     if flag_actor:
         flag_actor.set_editor_property("course", course_enum)
+        spawned += 1
+
+    for label, location, extent in checkpoints:
+        if spawn_trigger_volume(actor_subsystem, unreal.OctoCheckpoint, label,
+                                offset(location, island_x), extent, course_enum):
+            spawned += 1
+
+    for label, location, extent in kill_volumes:
+        if spawn_trigger_volume(actor_subsystem, unreal.OctoKillVolume, label,
+                                offset(location, island_x), extent, course_enum):
+            spawned += 1
+
+    # kill_z is left at its C++ default on purpose — see the table above.
+    label, location = kill_floor
+    floor_actor = spawn_class(actor_subsystem, unreal.OctoKillFloor, label, offset(location, island_x), (0.0, 0.0, 0.0))
+    if floor_actor:
+        floor_actor.set_editor_property("course", course_enum)
         spawned += 1
 
     for label, location, rotation, intensity in LIGHTS:
@@ -374,11 +481,13 @@ def main():
     spawned = 0
     spawned += build_course(actor_subsystem, cube_mesh, NORMAL_ISLAND_X,
                             NORMAL_BLOCKS, NORMAL_SPAWN, NORMAL_FLAG,
-                            unreal.OctoCourse.NORMAL, "Normal")
+                            unreal.OctoCourse.NORMAL, "Normal",
+                            NORMAL_CHECKPOINTS, NORMAL_KILL_VOLUMES, NORMAL_KILL_FLOOR)
     spawned += build_menu_island(actor_subsystem, cube_mesh, MENU_ISLAND_X)
     spawned += build_course(actor_subsystem, cube_mesh, HARD_ISLAND_X,
                             HARD_BLOCKS, HARD_SPAWN, HARD_FLAG,
-                            unreal.OctoCourse.HARD, "Hard")
+                            unreal.OctoCourse.HARD, "Hard",
+                            HARD_CHECKPOINTS, HARD_KILL_VOLUMES, HARD_KILL_FLOOR)
 
     # Not tagged, so the rebuild above never destroys it — WorldSettings is part
     # of the level itself, not part of the course.

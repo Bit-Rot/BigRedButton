@@ -168,11 +168,32 @@ The flow is `MainMenu → Playing → ScoreEntry → MainMenu`, with `ScoreView`
 the menu; there is deliberately no tutorial and no countdown between picking a
 course and controlling the octopus.
 
-**Positions live in the level, not in code.** `AOctoSpawnPoint` and
-`AOctoGoalFlag` are tagged with an `EOctoCourse`, and `AOctoViewPoint` carries
-the fixed menu camera. A course's spawn-point X *is* that course's play plane:
-the octopus is pinned to it and `AOctoCamera::SetPlayPlaneX` frames the same
-number, so the two cannot desync. Island spacing has one hard constraint —
+**Dying does not end a run.** Touching an `AOctoKillVolume`, or falling below
+the course's `AOctoKillFloor`, respawns the octopus at the last
+`AOctoCheckpoint` it touched — or at the course's `AOctoSpawnPoint` if it has
+touched none. **The clock keeps running and is never reset**: the only score
+this game has is a finishing time, so a death has to cost seconds rather than
+the run (resetting the clock would make the top ten a table of deathless runs;
+ending the run would bounce a QWOP octopus back to the menu every few seconds).
+All three hazards funnel through `AOctoGameMode::KillOcto → RespawnOcto`, which
+is a *pawn swap* inside a live run — camera, clock and checkpoint all survive —
+as opposed to `RestartRun` (the dev menu's respawn), which rebuilds from
+`EnterCourse`. Checkpoints are **latest-touched, not furthest-reached**.
+
+The kill floor is a **plane, not a volume**, and is the one hazard with no
+collision: a box big enough to be sure of catching an octopus that has left the
+level sideways is a box you must resize every time the course grows, whereas a
+Z test cannot be missed at any speed. `AOctoKillFloor`'s own position is
+therefore meaningless — only its `KillZ` is read, and a course with none placed
+still falls back to `OctoRespawn::DefaultKillFloorZ` (−10000).
+
+**Positions live in the level, not in code.** `AOctoSpawnPoint`,
+`AOctoGoalFlag`, `AOctoCheckpoint` and `AOctoKillVolume` are tagged with an
+`EOctoCourse`, and `AOctoViewPoint` carries the fixed menu camera. A course's
+spawn-point X *is* that course's play plane:
+the octopus is pinned to it, `AOctoCamera::SetPlayPlaneX` frames the same
+number, and `OctoRespawn::ResolveLocation` forces a checkpoint respawn back onto
+it, so the three cannot desync. Island spacing has one hard constraint —
 `spacing > CameraDistanceX + island depth`, or one island sits on another
 island's camera. See `AI/build_octo_odyssey.py`'s header.
 
@@ -199,14 +220,20 @@ classes prefixed `AOcto*`/`FOcto*`/namespaces `OctoArm`, `OctoBody`,
 | `Public/OctoOdyssey/OctoCamera.h` + `Private/` | `AOctoCamera` — side-on follow camera (looks along +X at the Y-Z play plane) |
 | `Public/OctoOdyssey/OctoGoalFlag.h` + `Private/` | `AOctoGoalFlag` — placeable overlap trigger, tagged with its `EOctoCourse`, broadcasts `OnReached(Course)` |
 | `Public/OctoOdyssey/OctoSpawnPoint.h` + `Private/` | `AOctoSpawnPoint` — placeable spawn marker, tagged with its `EOctoCourse`; its X is that course's play plane |
+| `Public/OctoOdyssey/OctoRespawn.h` | Pure, world-free respawn rules (`namespace OctoRespawn`) — checkpoint-or-start, the play-plane pin, the kill-floor test, the default floor Z |
+| `Public/OctoOdyssey/OctoTriggerVolume.h` + `Private/` | `AOctoTriggerVolume` — abstract base for the placeable overlap volumes; configures **every** shape on the actor at BeginPlay so extra colliders can be added per instance in the editor |
+| `Public/OctoOdyssey/OctoCheckpoint.h` + `Private/` | `AOctoCheckpoint` — trigger box(es) + an arrow for where the octopus comes back; latest-touched wins |
+| `Public/OctoOdyssey/OctoKillVolume.h` + `Private/` | `AOctoKillVolume` — touch-and-die hazard; deliberately never latches (the GameMode collapses duplicate deaths) |
+| `Public/OctoOdyssey/OctoKillFloor.h` + `Private/` | `AOctoKillFloor` — a `KillZ` plane, not a volume; no collision at all, tested in `AOctoGameMode::Tick` |
 | `Private/OctoOdyssey/Tests/OctoArmMathTest.cpp` | `OctoArm::` unit tests |
 | `Private/OctoOdyssey/Tests/OctoBodySpringTest.cpp` | `OctoBody::` unit tests — the spring, the chain bend round trip, the squash |
 | `Private/OctoOdyssey/Tests/OctoSkeletonTest.cpp` | The guard rail on `/Game/OctoOdyssey/SK_Okto` — a re-export that breaks the rig fails here instead of mis-posing silently |
 | `Private/OctoOdyssey/Tests/OctoTuningTest.cpp` | Descriptor table, JSON and ini round trips |
 | `Private/OctoOdyssey/Tests/OctoScoresTest.cpp` | Ranking rules, ties, truncation, the name alphabet, time formatting, ini round trips |
+| `Private/OctoOdyssey/Tests/OctoRespawnTest.cpp` | `OctoRespawn::` unit tests — checkpoint precedence, the play-plane pin, the strict kill-floor comparison |
 | `Game/Config/OctoTuning.ini` | The tuned values on disk, overlaid onto `FOctoTuning`'s defaults at startup |
 | `Game/Config/OctoScores.ini` | The two top-ten tables on disk, overlaid onto the seeded defaults at startup |
-| `AI/build_octo_odyssey.py` | Headless Python script that builds L_OctoOdyssey — all three islands, both courses' spawn/flag actors, the menu view point, and the level's GameMode override |
+| `AI/build_octo_odyssey.py` | Headless Python script that builds L_OctoOdyssey — all three islands, both courses' spawn/flag/checkpoint/hazard actors, the menu view point, and the level's GameMode override |
 | `AI/build_octo_course.py` | The superseded single-course builder for L_GameC. Kept and still working; L_GameC is now a plain minigame slot |
 
 **The skeletal mesh is posed entirely in C++.** There is no Control Rig asset, no

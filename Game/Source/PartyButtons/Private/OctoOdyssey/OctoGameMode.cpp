@@ -2,7 +2,10 @@
 #include "PartyButtons.h"
 #include "OctoOdyssey/OctoPawn.h"
 #include "OctoOdyssey/OctoCamera.h"
+#include "OctoOdyssey/OctoCheckpoint.h"
 #include "OctoOdyssey/OctoGoalFlag.h"
+#include "OctoOdyssey/OctoKillFloor.h"
+#include "OctoOdyssey/OctoKillVolume.h"
 #include "OctoOdyssey/OctoSpawnPoint.h"
 #include "OctoOdyssey/OctoViewPoint.h"
 #include "OctoOdyssey/OctoPlayerController.h"
@@ -62,6 +65,7 @@ void AOctoGameMode::BeginPlay()
 
     MenuViewPoint = FindMenuViewPoint();
     BindGoalFlags();
+    BindHazards();
     MaybeSpawnFallbackLight();
 
     PendingName = OctoScores::BlankName();
@@ -144,6 +148,52 @@ void AOctoGameMode::BindGoalFlags()
     }
 }
 
+void AOctoGameMode::BindHazards()
+{
+    if (!GetWorld()) { return; }
+
+    int32 NumVolumes     = 0;
+    int32 NumCheckpoints = 0;
+
+    for (TActorIterator<AOctoKillVolume> It(GetWorld()); It; ++It)
+    {
+        It->OnTouched.AddUObject(this, &AOctoGameMode::HandleKillVolumeTouched);
+        ++NumVolumes;
+    }
+
+    for (TActorIterator<AOctoCheckpoint> It(GetWorld()); It; ++It)
+    {
+        It->OnReached.AddUObject(this, &AOctoGameMode::HandleCheckpointReached);
+        ++NumCheckpoints;
+    }
+
+    // Log, not warn. Unlike a missing goal flag (which makes a course
+    // uncompletable), zero hazards and zero checkpoints is a perfectly good
+    // course — it just means the kill floor is the only way to die and the
+    // spawn point is the only way back.
+    UE_LOG(LogPartyButtons, Log, TEXT("AOctoGameMode: bound %d kill volume(s) and %d checkpoint(s)."),
+        NumVolumes, NumCheckpoints);
+}
+
+float AOctoGameMode::FindKillFloorZ(EOctoCourse Course) const
+{
+    if (GetWorld())
+    {
+        // First match wins. Two floors on one course is a level-authoring
+        // mistake with no sensible resolution — picking the higher one would
+        // silently make the lower one dead geometry nobody could find.
+        for (TActorIterator<AOctoKillFloor> It(GetWorld()); It; ++It)
+        {
+            if (It->GetCourse() == Course)
+            {
+                return It->GetKillZ();
+            }
+        }
+    }
+
+    return FallbackKillFloorZ;
+}
+
 void AOctoGameMode::MaybeSpawnFallbackLight()
 {
     if (!bSpawnFallbackLight || !GetWorld()) { return; }
@@ -203,6 +253,15 @@ void AOctoGameMode::EnterCourse(EOctoCourse Course)
 
     const FVector SpawnLocation = FindSpawnLocation(Course);
 
+    // Per-run respawn state, seeded before anything can die. The checkpoint in
+    // particular is a fact about a RUN and not a save: starting the normal course
+    // must not resume from a checkpoint touched on the hard one, or on the
+    // previous attempt at this one.
+    CourseStartLocation = SpawnLocation;
+    ActiveCheckpoint    = nullptr;
+    ActiveKillFloorZ    = FindKillFloorZ(Course);
+    bRespawnPending     = false;
+
     // Re-arm both flags. The flag's one-shot used to be cleared by the level
     // reload that reaching it triggered; nothing reloads any more, so without this
     // the second run of a session could never be finished.
@@ -243,8 +302,12 @@ void AOctoGameMode::EnterCourse(EOctoCourse Course)
     FlowState    = EOctoFlowState::Playing;
     RunStartTime = GetWorld()->GetTimeSeconds();
 
-    UE_LOG(LogPartyButtons, Log, TEXT("AOctoGameMode: starting the %s course at %s."),
-        OctoCourse::ToString(Course), *SpawnLocation.ToCompactString());
+    // The same grace a respawn gets, for the same reason: a spawn point placed
+    // inside a hazard should be a warning per half-second, not a locked frame.
+    RespawnSafeUntilTime = RunStartTime + RespawnGraceSeconds;
+
+    UE_LOG(LogPartyButtons, Log, TEXT("AOctoGameMode: starting the %s course at %s (kill floor Z %.0f)."),
+        OctoCourse::ToString(Course), *SpawnLocation.ToCompactString(), ActiveKillFloorZ);
 }
 
 void AOctoGameMode::LeaveCourse()
@@ -337,6 +400,127 @@ void AOctoGameMode::HandleGoalReached(EOctoCourse Course)
         PendingRank == INDEX_NONE
             ? TEXT("missed the top ten")
             : *FString::Printf(TEXT("rank %d"), PendingRank + 1));
+}
+
+// ---- Dying -----------------------------------------------------------------
+
+void AOctoGameMode::HandleKillVolumeTouched(EOctoCourse Course)
+{
+    // Same guard as HandleGoalReached, and for the same reason: all three
+    // islands are in one level, so a volume on the course nobody is playing must
+    // not kill the run that is.
+    if (Course != ActiveCourse) { return; }
+
+    KillOcto(TEXT("touched a kill volume"));
+}
+
+void AOctoGameMode::HandleCheckpointReached(AOctoCheckpoint* Checkpoint)
+{
+    if (FlowState != EOctoFlowState::Playing || !Checkpoint) { return; }
+    if (Checkpoint->GetCourse() != ActiveCourse) { return; }
+
+    // Re-announcing the current one is the common case — one box per shape, and
+    // the octopus sits in a checkpoint for as long as it takes to climb out of
+    // it. Only the CHANGE is worth acting on, and worth a log line.
+    if (ActiveCheckpoint.Get() == Checkpoint) { return; }
+
+    ActiveCheckpoint = Checkpoint;
+
+    UE_LOG(LogPartyButtons, Log, TEXT("AOctoGameMode: checkpoint '%s' reached — respawns now at %s."),
+        *Checkpoint->GetName(), *Checkpoint->GetRespawnLocation().ToCompactString());
+}
+
+void AOctoGameMode::TickKillFloor()
+{
+    if (!Octo || bRespawnPending) { return; }
+
+    if (OctoRespawn::IsBelowKillFloor(Octo->GetActorLocation(), ActiveKillFloorZ))
+    {
+        KillOcto(TEXT("fell past the kill floor"));
+    }
+}
+
+void AOctoGameMode::KillOcto(const TCHAR* Reason)
+{
+    if (FlowState != EOctoFlowState::Playing || !Octo || bRespawnPending) { return; }
+
+    // The grace window. Everything it protects against is a level-authoring
+    // mistake — see RespawnGraceSeconds — so it stays quiet rather than logging
+    // the kills it swallows, which would drown out the warning below.
+    if (GetWorld() && GetWorld()->GetTimeSeconds() < RespawnSafeUntilTime) { return; }
+
+    bRespawnPending = true;
+
+    UE_LOG(LogPartyButtons, Warning, TEXT("AOctoGameMode: octopus killed at %s (%s) — respawning at %s."),
+        *Octo->GetActorLocation().ToCompactString(), Reason, *FindRespawnLocation().ToCompactString());
+
+    // Deferred a tick, exactly as HandleGoalReached defers its teardown: this
+    // runs from inside an overlap callback (or, for the kill floor, from Tick),
+    // and destroying the simulating pawn from in there is the hazard that
+    // deferral exists for. bRespawnPending also collapses every other kill
+    // reported before the next tick into this one.
+    GetWorldTimerManager().SetTimerForNextTick([this]()
+    {
+        RespawnOcto();
+    });
+}
+
+FVector AOctoGameMode::FindRespawnLocation() const
+{
+    const AOctoCheckpoint* Checkpoint = ActiveCheckpoint.Get();
+
+    return OctoRespawn::ResolveLocation(
+        CourseStartLocation,
+        Checkpoint ? Checkpoint->GetRespawnLocation() : FVector::ZeroVector,
+        Checkpoint != nullptr,
+        CourseStartLocation.X); // the course's play plane — see FindSpawnLocation
+}
+
+void AOctoGameMode::RespawnOcto()
+{
+    bRespawnPending = false;
+
+    // The run can have ended in the tick between the kill and this callback —
+    // the octopus can reach the flag and a kill volume on the same frame, and
+    // the abandon hold can land in between too. Finishing wins.
+    if (FlowState != EOctoFlowState::Playing || !GetWorld() || !OctoPawnClass) { return; }
+
+    if (Octo)
+    {
+        Octo->Destroy();
+        Octo = nullptr;
+    }
+
+    const FVector RespawnLocation = FindRespawnLocation();
+
+    FActorSpawnParameters Params;
+    Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+    Octo = GetWorld()->SpawnActor<AOctoPawn>(OctoPawnClass, FTransform(RespawnLocation), Params);
+    if (!Octo)
+    {
+        // Nothing to watch and nothing to drive — the same dead end EnterCourse
+        // backs out of when the camera fails to spawn.
+        UE_LOG(LogPartyButtons, Warning, TEXT("AOctoGameMode: failed to respawn AOctoPawn — abandoning the run."));
+        ReturnToMenu();
+        return;
+    }
+
+    RespawnSafeUntilTime = GetWorld()->GetTimeSeconds() + RespawnGraceSeconds;
+
+    // A CUT, not a sweep. The camera is wherever the octopus died — which for a
+    // kill-floor death is somewhere far below the level — and interping back up
+    // to a checkpoint would be seconds of watching empty sky on a clock that is
+    // still running. SnapToTarget is also what EnterCourse does, so a respawn
+    // frames the octopus exactly the way the start of the run did.
+    if (Camera)
+    {
+        Camera->SetFollowTarget(Octo);
+        Camera->SnapToTarget();
+    }
+
+    // Deliberately no clock reset and no view blend: this is a pawn swap inside a
+    // live run. See the class comment.
 }
 
 void AOctoGameMode::CommitPendingScore()
@@ -581,6 +765,10 @@ void AOctoGameMode::Tick(float DeltaSeconds)
     if (FlowState == EOctoFlowState::ScoreEntry)
     {
         TickNameEntry(DeltaSeconds);
+    }
+    else if (FlowState == EOctoFlowState::Playing)
+    {
+        TickKillFloor();
     }
 }
 
