@@ -12,7 +12,7 @@ AOctoTriggerVolume::AOctoTriggerVolume()
     Trigger = CreateDefaultSubobject<UBoxComponent>(TEXT("Trigger"));
     Trigger->SetupAttachment(RootComponent);
     Trigger->SetBoxExtent(TriggerExtent);
-    Trigger->SetCollisionProfileName(TEXT("Trigger")); // stock: QueryOnly, WorldDynamic, overlaps Pawn/PhysicsBody
+    Trigger->SetCollisionProfileName(OctoCollision::TriggerProfile); // NOT stock "Trigger" -- see OctoCollision::TriggerProfile
     Trigger->SetGenerateOverlapEvents(true);
 }
 
@@ -45,7 +45,7 @@ void AOctoTriggerVolume::BeginPlay()
 
         for (UShapeComponent* Shape : Shapes)
         {
-            Shape->SetCollisionProfileName(TEXT("Trigger"));
+            Shape->SetCollisionProfileName(OctoCollision::TriggerProfile);
             Shape->SetGenerateOverlapEvents(true);
         }
     }

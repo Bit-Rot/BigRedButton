@@ -66,3 +66,37 @@ enum class EOctoFlowState : uint8
     /** Both tables shown side by side, read-only (the TOP SCORES menu option). */
     ScoreView,
 };
+
+/**
+ * Collision setup shared by everything in OctoOdyssey that is a trigger.
+ */
+namespace OctoCollision
+{
+    /**
+     * Collision profile for every trigger volume in the game -- AOctoTriggerVolume's
+     * shapes and AOctoGoalFlag's. Defined in Game/Config/DefaultEngine.ini alongside
+     * the OctoTrigger OBJECT channel it uses.
+     *
+     * NOT the stock "Trigger" profile, and the difference is not cosmetic. Stock
+     * Trigger is QueryOnly with every response set to Overlap, which makes it
+     * correctly non-solid to the physics scene -- but its OBJECT TYPE is
+     * WorldDynamic, and AOctoPawn sweeps its arms and head with
+     * SweepSingleByObjectType(WorldStatic | WorldDynamic). An object query filters
+     * on object type alone and reports every match as a BLOCKING hit; the profile's
+     * responses are never read. So a stock-Trigger checkpoint let the body sphere
+     * float through it exactly as intended while an extending arm planted on its
+     * invisible faces, took EAchieved = E + Hit.Distance, and fired a push-off
+     * impulse at the phantom impact point -- an off-centre shove out of thin air,
+     * from a different face depending on where the octopus happened to be.
+     *
+     * OctoTrigger fixes that at the source: same QueryOnly, same overlap-everything
+     * responses, but an object type those sweeps do not ask for. The volumes vanish
+     * from the sweeps and overlap detection is untouched -- AOctoPawn::BodySphere is
+     * a PhysicsActor (object type PhysicsBody), the profile overlaps PhysicsBody,
+     * and the channel's own default response is Overlap.
+     *
+     * A new sweep that needs to see real geometry must therefore never simply add
+     * "every object type" -- see AOctoPawn::TickArm.
+     */
+    inline const TCHAR* const TriggerProfile = TEXT("OctoTrigger");
+}

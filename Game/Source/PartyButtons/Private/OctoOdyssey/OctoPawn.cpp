@@ -478,8 +478,9 @@ void AOctoPawn::ResolveHeadCollision(const FVector& StartWorld)
         return;
     }
 
-    // Same object types as the arm sweep, and the same reason for QueryParams ignoring this
-    // actor: without it the head would collide with the octopus's own arm capsules.
+    // Same object types as the arm sweep, the same object-query caveat (see TickArm),
+    // and the same reason for QueryParams ignoring this actor: without it the head
+    // would collide with the octopus's own arm capsules.
     FCollisionObjectQueryParams ObjectParams;
     ObjectParams.AddObjectTypesToQuery(ECC_WorldStatic);
     ObjectParams.AddObjectTypesToQuery(ECC_WorldDynamic);
@@ -803,6 +804,13 @@ void AOctoPawn::TickArm(int32 ArmIndex, float DeltaSeconds, const FVector& Frame
         const FVector Start = Origin + WorldDir * StartOffset;
         const FVector End   = Origin + WorldDir * EndOffset;
 
+        // An OBJECT query: it matches on object TYPE and reports every match as a
+        // blocking hit, so a shape's collision responses are never consulted here.
+        // Anything that must stay non-solid to an arm therefore has to be kept out
+        // of this list by its object type -- which is exactly why the game's
+        // trigger volumes carry their own channel (OctoCollision::TriggerProfile)
+        // rather than the stock WorldDynamic "Trigger" profile. Adding an object
+        // type here re-solidifies everything wearing it.
         FCollisionObjectQueryParams ObjectParams;
         ObjectParams.AddObjectTypesToQuery(ECC_WorldStatic);
         ObjectParams.AddObjectTypesToQuery(ECC_WorldDynamic);

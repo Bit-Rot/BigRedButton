@@ -34,6 +34,11 @@ class UBoxComponent;
  * it off is the escape hatch for an instance that genuinely wants a shape doing
  * something else.
  *
+ * The profile forced on every shape is OctoCollision::TriggerProfile, NOT the
+ * stock "Trigger" one. Read that comment before changing it: stock Trigger is
+ * WorldDynamic, and a WorldDynamic volume is a solid surface to AOctoPawn's arm
+ * and head sweeps even though it is non-solid to physics.
+ *
  * Subclasses implement NotifyOctoTouched and nothing else. Note it can fire more
  * than once per octopus — once per overlapping shape, and again if the octopus
  * leaves and returns — so every subclass must be idempotent: AOctoKillVolume

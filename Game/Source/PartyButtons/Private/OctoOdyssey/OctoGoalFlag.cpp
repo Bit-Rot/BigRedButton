@@ -17,7 +17,7 @@ AOctoGoalFlag::AOctoGoalFlag()
     Trigger = CreateDefaultSubobject<UBoxComponent>(TEXT("Trigger"));
     Trigger->SetupAttachment(RootComponent);
     Trigger->SetBoxExtent(TriggerExtent);
-    Trigger->SetCollisionProfileName(TEXT("Trigger")); // stock: QueryOnly, WorldDynamic, overlaps Pawn/PhysicsBody
+    Trigger->SetCollisionProfileName(OctoCollision::TriggerProfile); // NOT stock "Trigger" -- see OctoCollision::TriggerProfile
     Trigger->SetGenerateOverlapEvents(true);
     Trigger->OnComponentBeginOverlap.AddDynamic(this, &AOctoGoalFlag::HandleBeginOverlap);
 
