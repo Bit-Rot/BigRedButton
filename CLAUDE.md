@@ -25,6 +25,7 @@ level, rules and scoring:
 - Architecture decisions: `AI/design/architecture.md`
 - Build/test/run commands: `AI/reference/autonomous-validation.md`
 - Hardware-gated steps: `AI/deferred-manual-work.md`
+- Texture/material generation (RTX Remix I2M CLI): `AI/reference/rtx-remix-texture-gen.md`
 
 ## Project layout
 
