@@ -33,3 +33,7 @@ Desktop.ini
 # Teensy / Arduino build artifacts
 Firmware/.pio/
 Firmware/build/
+
+# Python
+__pycache__/
+*.pyc
