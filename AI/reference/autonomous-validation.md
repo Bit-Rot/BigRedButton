@@ -61,6 +61,9 @@ Test suites (non-exhaustive — grep the report for the full list):
   math: direction/spacing, the engine-Roll-convention pin
   (`ArmDirectionWorldMatchesRollRotation`), extension invariants, launch impulse
 - `PartyButtons.Octo.Roster.SlotTwoIsOctoOdyssey` — roster slot 2 wiring guard
+- `PartyButtons.Atrophy.TileMesh.*` (4 tests) — AtrophyTools tile grid math, count
+  clamping, bounds-aligned mesh offset, and a spawned-actor instance-count check.
+  The editor face-handle visualizer needs a viewport and is not covered headlessly.
 
 **Known pre-existing failure (unrelated to any of the above):**
 `PartyButtons.Input.Dispatch.MapsKeyboardEmulationKeys`

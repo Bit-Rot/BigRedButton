@@ -12,6 +12,7 @@ class AOctoPawn;
 class AOctoCamera;
 class AOctoCheckpoint;
 class AOctoViewPoint;
+class AJukeBox;
 
 /**
  * AOctoGameMode
@@ -231,6 +232,22 @@ protected:
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Name Entry")
     float NameHoldRepeatHz = 7.f;
 
+    /** Track on the level's AJukeBox that this game's volume changes apply to. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Music")
+    FName MusicTrackName = TEXT("TwoLeftSocks");
+
+    /** Music volume on the menu island and the score screens — tucked under the UI. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Music", meta = (ClampMin = "0.0"))
+    float MenuMusicVolume = 0.15f;
+
+    /** Music volume during a run. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Music", meta = (ClampMin = "0.0"))
+    float PlayingMusicVolume = 0.8f;
+
+    /** Seconds to ease between the two. Matches ViewBlendSeconds so sound and camera move together. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Music", meta = (ClampMin = "0.0"))
+    float MusicEaseSeconds = 1.0f;
+
     /** Spawn a Movable directional light if the level has none — keeps a half-built map visible. */
     UPROPERTY(EditDefaultsOnly, Category = "Octo")
     bool bSpawnFallbackLight = true;
@@ -246,6 +263,15 @@ private:
 
     /** Blend to the menu island and show the menu. Shared exit from every other state. */
     void ReturnToMenu();
+
+    /**
+     * The one way FlowState changes after BeginPlay. Exists so the music can
+     * follow the state without every transition having to remember it.
+     */
+    void SetFlowState(EOctoFlowState NewState);
+
+    /** Ease (or snap) the music to the volume for the current FlowState. No-op with no jukebox. */
+    void ApplyMusicForFlowState(bool bImmediate);
 
     /** Bound to every AOctoGoalFlag::OnReached. */
     void HandleGoalReached(EOctoCourse Course);
@@ -295,6 +321,9 @@ private:
     // ---- Level queries -------------------------------------------------------
 
     AOctoViewPoint* FindMenuViewPoint() const;
+
+    /** The first AJukeBox in the level, or null. */
+    AJukeBox* FindJukeBox() const;
 
     /** Spawn location for Course, X included — that X is the course's play plane. */
     FVector FindSpawnLocation(EOctoCourse Course) const;
@@ -360,6 +389,9 @@ private:
 
     UPROPERTY()
     TObjectPtr<AOctoViewPoint> MenuViewPoint;
+
+    UPROPERTY()
+    TObjectPtr<AJukeBox> JukeBox;
 
     EOctoFlowState FlowState    = EOctoFlowState::MainMenu;
     EOctoCourse    ActiveCourse = EOctoCourse::Normal;

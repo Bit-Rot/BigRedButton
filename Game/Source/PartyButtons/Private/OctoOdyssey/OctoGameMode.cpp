@@ -13,6 +13,7 @@
 #include "OctoOdyssey/OctoArmMath.h"
 #include "OctoOdyssey/OctoTuningSubsystem.h"
 #include "OctoOdyssey/OctoScoreSubsystem.h"
+#include "JukeBox.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/WorldSettings.h"
 #include "Engine/DirectionalLight.h"
@@ -64,6 +65,7 @@ void AOctoGameMode::BeginPlay()
     LoadAndApplyCourseTuning();
 
     MenuViewPoint = FindMenuViewPoint();
+    JukeBox       = FindJukeBox();
     BindGoalFlags();
     BindHazards();
     MaybeSpawnFallbackLight();
@@ -73,7 +75,8 @@ void AOctoGameMode::BeginPlay()
     // Immediate, not blended: there is nothing to blend FROM on the first frame,
     // and a blend from the default auto-view target reads as a stray camera swoop
     // every time the level opens.
-    FlowState = EOctoFlowState::MainMenu;
+    SetFlowState(EOctoFlowState::MainMenu);
+    ApplyMusicForFlowState(/*bImmediate=*/true); // same reason — no fade in from full volume on launch
     SetViewTo(MenuViewPoint, /*bImmediate=*/true);
 }
 
@@ -108,6 +111,20 @@ void AOctoGameMode::PostLogin(APlayerController* NewPlayer)
     {
         NewPlayer->SetViewTarget(Target);
     }
+}
+
+AJukeBox* AOctoGameMode::FindJukeBox() const
+{
+    if (!GetWorld()) { return nullptr; }
+
+    // First one wins. Music is optional — a level with no jukebox is silent, not broken.
+    for (TActorIterator<AJukeBox> It(GetWorld()); It; ++It)
+    {
+        return *It;
+    }
+
+    UE_LOG(LogPartyButtons, Log, TEXT("AOctoGameMode: no AJukeBox placed — no music."));
+    return nullptr;
 }
 
 AOctoViewPoint* AOctoGameMode::FindMenuViewPoint() const
@@ -299,7 +316,7 @@ void AOctoGameMode::EnterCourse(EOctoCourse Course)
 
     // No countdown and no tutorial: the octopus is live the instant it exists, and
     // the clock starts with it. The view blend runs over the top of live play.
-    FlowState    = EOctoFlowState::Playing;
+    SetFlowState(EOctoFlowState::Playing);
     RunStartTime = GetWorld()->GetTimeSeconds();
 
     // The same grace a respawn gets, for the same reason: a spawn point placed
@@ -358,8 +375,37 @@ void AOctoGameMode::ReturnToMenu()
     PendingName     = OctoScores::BlankName();
     FinishedSeconds = 0.f;
 
-    FlowState = EOctoFlowState::MainMenu;
+    SetFlowState(EOctoFlowState::MainMenu);
     SetViewTo(MenuViewPoint, /*bImmediate=*/false);
+}
+
+void AOctoGameMode::SetFlowState(EOctoFlowState NewState)
+{
+    if (FlowState == NewState) { return; }
+
+    FlowState = NewState;
+    ApplyMusicForFlowState(/*bImmediate=*/false);
+}
+
+void AOctoGameMode::ApplyMusicForFlowState(bool bImmediate)
+{
+    if (!JukeBox || !JukeBox->HasTrack(MusicTrackName)) { return; }
+
+    // Two levels, not four: every state that isn't a live run is on the menu
+    // island (the score screens included), and all of them want the music
+    // tucked under the UI. Driven by the STATE rather than by the calls that
+    // change it, so any number of menu <-> course round trips land on the same
+    // two volumes — there is no running offset to drift.
+    const float Target = (FlowState == EOctoFlowState::Playing) ? PlayingMusicVolume : MenuMusicVolume;
+
+    if (bImmediate)
+    {
+        JukeBox->SetTrackVolume(MusicTrackName, Target);
+    }
+    else
+    {
+        JukeBox->EaseTrackVolume(MusicTrackName, Target, MusicEaseSeconds);
+    }
 }
 
 void AOctoGameMode::HandleGoalReached(EOctoCourse Course)
@@ -383,7 +429,7 @@ void AOctoGameMode::HandleGoalReached(EOctoCourse Course)
 
     // State flips NOW, so the buttons stop driving arms on this very frame and
     // start driving name entry.
-    FlowState = EOctoFlowState::ScoreEntry;
+    SetFlowState(EOctoFlowState::ScoreEntry);
 
     // Teardown is deferred one tick. This runs from inside AOctoGoalFlag's
     // overlap callback, i.e. during this tick's physics/overlap processing, and
@@ -610,7 +656,7 @@ void AOctoGameMode::ActivateMenuOption()
     case 2:
         // Read-only: no PendingRank is set, so the HUD draws both tables with no
         // editable row and the header reads TOP SCORES.
-        FlowState = EOctoFlowState::ScoreView;
+        SetFlowState(EOctoFlowState::ScoreView);
         break;
 
     default:

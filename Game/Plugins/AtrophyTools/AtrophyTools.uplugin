@@ -1,0 +1,29 @@
+{
+    "FileVersion": 3,
+    "Version": 1,
+    "VersionName": "1.0",
+    "FriendlyName": "AtrophyTools",
+    "Description": "Level blockout tools. Currently: AAtrophyTileMeshActor, an actor that tiles a cube mesh through an X/Y/Z volume, with editor viewport handles for dragging the volume out along each axis.",
+    "Category": "Editor",
+    "CreatedBy": "Andrew Black",
+    "CreatedByURL": "",
+    "DocsURL": "",
+    "MarketplaceURL": "",
+    "SupportURL": "",
+    "CanContainContent": false,
+    "IsBetaVersion": false,
+    "IsExperimentalVersion": false,
+    "Installed": false,
+    "Modules": [
+        {
+            "Name": "AtrophyTools",
+            "Type": "Runtime",
+            "LoadingPhase": "Default"
+        },
+        {
+            "Name": "AtrophyToolsEditor",
+            "Type": "Editor",
+            "LoadingPhase": "PostEngineInit"
+        }
+    ]
+}

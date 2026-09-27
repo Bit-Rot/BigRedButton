@@ -35,6 +35,8 @@ Game/                     UE 5.7 test project (PartyButtons.uproject)
   Config/OctoTuning.ini   OctoOdyssey game-feel overrides (written by the Tab dev menu)
   Config/OctoScores.ini   OctoOdyssey top-ten tables (written on every name entry)
   Plugins/PartyInput/     THE REUSABLE PLUGIN — this is the deliverable
+  Plugins/AtrophyTools/   Blockout tools: AAtrophyTileMeshActor (tiles a cube mesh over an
+                          X/Y/Z volume) + editor face-handle visualizer. Runtime + Editor modules.
   Source/PartyButtons/    Demo glue: GameMode + HUD
     OctoOdyssey/          The OctoOdyssey game, Public/ + Private/ subfolder
 Firmware/                 Teensy firmware (PartyButtons.ino)
@@ -43,6 +45,21 @@ AI/                       AI-generated docs, reference, and level-build scripts
 Docs/                     Human-authored docs
 Assets/                   Offline assets (models, images) for import into engine
 ```
+
+## Working against the running editor (preferred)
+
+The user usually has the editor open (a DebugGame build). Make level/asset edits
+inside it and apply C++ with Live Coding. Don't close it, and don't use a headless
+commandlet that saves maps behind its back.
+
+```
+python AI/tools/ue_remote.py <script.py>      # or -c "import unreal; ..."
+python AI/tools/ue_livecode.py                # LiveCoding.Compile + wait for result
+```
+
+Classes added by Live Coding have no `unreal.X` Python wrapper until the next
+editor start. Use `unreal.load_class(None, '/Script/PartyButtons.X')` plus
+`call_method`. `AI/add_octo_jukebox.py` is the worked example.
 
 ## Level-build scripts
 
