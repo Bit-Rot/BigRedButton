@@ -19,7 +19,7 @@ AOctoGoalFlag::AOctoGoalFlag()
     Trigger->SetBoxExtent(TriggerExtent);
     Trigger->SetCollisionProfileName(OctoCollision::TriggerProfile); // NOT stock "Trigger" -- see OctoCollision::TriggerProfile
     Trigger->SetGenerateOverlapEvents(true);
-    Trigger->OnComponentBeginOverlap.AddDynamic(this, &AOctoGoalFlag::HandleBeginOverlap);
+    // OnComponentBeginOverlap is bound in BeginPlay, not here — see BeginPlay.
 
     static ConstructorHelpers::FObjectFinder<UStaticMesh> CylinderMeshFinder(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
     static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMeshFinder(TEXT("/Engine/BasicShapes/Cube.Cube"));
@@ -67,6 +67,20 @@ AOctoGoalFlag::AOctoGoalFlag()
             Flag->SetMaterial(0, FlagMID);
         }
     }
+}
+
+void AOctoGoalFlag::BeginPlay()
+{
+    Super::BeginPlay();
+
+    // Bound here rather than in the constructor. The delegate is a UPROPERTY and
+    // is serialized per placed instance, and deserialization runs AFTER the
+    // constructor — so a saved binding list overwrites a constructor-time
+    // AddDynamic. An instance copied or moved between levels (Move to Level,
+    // copy-paste) saves a stale cross-level binding that is cleared to an EMPTY
+    // list, and the flag then loads with nothing listening: it overlaps and
+    // never fires. Binding at BeginPlay cannot be overridden by anything saved.
+    Trigger->OnComponentBeginOverlap.AddUniqueDynamic(this, &AOctoGoalFlag::HandleBeginOverlap);
 }
 
 void AOctoGoalFlag::HandleBeginOverlap(

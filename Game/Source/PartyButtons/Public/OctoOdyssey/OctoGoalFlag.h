@@ -49,6 +49,8 @@ public:
     void ResetTrigger() { bReached = false; }
 
 protected:
+    virtual void BeginPlay() override;
+
     UPROPERTY(EditDefaultsOnly, Category = "Octo")
     FVector TriggerExtent = FVector(100.f, 100.f, 200.f);
 

@@ -20,6 +20,7 @@ public class PartyButtons : ModuleRules
             "EnhancedInput",
             "PartyInput",
             "PhysicsCore", // UPhysicalMaterial — see AOctoPawn::ApplySurfaceMaterial
+            "Water",       // AOctoBackgroundBoat samples the ocean surface
         });
     }
 }
