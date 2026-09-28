@@ -14,6 +14,7 @@
 #include "OctoOdyssey/OctoTuningSubsystem.h"
 #include "OctoOdyssey/OctoScoreSubsystem.h"
 #include "JukeBox.h"
+#include "PartyAudioSubsystem.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/WorldSettings.h"
 #include "Engine/DirectionalLight.h"
@@ -21,6 +22,22 @@
 #include "Engine/World.h"
 #include "EngineUtils.h" // TActorIterator
 #include "TimerManager.h"
+
+namespace
+{
+    /**
+     * Measure sound distance from the octopus rather than the far-off camera (see
+     * UPartyAudioSubsystem::SetAttenuationFocus). Called whenever Octo changes;
+     * null (no octopus) puts the listener back on the camera.
+     */
+    void FocusAudioOn(const UObject* WorldContext, const AOctoPawn* Octo)
+    {
+        if (UPartyAudioSubsystem* Audio = UPartyAudioSubsystem::Get(WorldContext))
+        {
+            Audio->SetAttenuationFocus(Octo ? Octo->GetAudioFocus() : nullptr);
+        }
+    }
+}
 
 namespace
 {
@@ -296,6 +313,7 @@ void AOctoGameMode::EnterCourse(EOctoCourse Course)
         UE_LOG(LogPartyButtons, Warning, TEXT("AOctoGameMode: failed to spawn AOctoPawn."));
         return;
     }
+    FocusAudioOn(this, Octo);
 
     Camera = GetWorld()->SpawnActor<AOctoCamera>(OctoCameraClass, FTransform::Identity);
     if (!Camera)
@@ -338,6 +356,7 @@ void AOctoGameMode::LeaveCourse()
         Octo->Destroy();
         Octo = nullptr;
     }
+    FocusAudioOn(this, nullptr);
 
     LetterHolds.Reset();
 
@@ -551,6 +570,7 @@ void AOctoGameMode::RespawnOcto()
         ReturnToMenu();
         return;
     }
+    FocusAudioOn(this, Octo);
 
     RespawnSafeUntilTime = GetWorld()->GetTimeSeconds() + RespawnGraceSeconds;
 

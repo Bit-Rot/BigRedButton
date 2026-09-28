@@ -19,6 +19,7 @@ public class PartyButtons : ModuleRules
             "InputCore",
             "EnhancedInput",
             "PartyInput",
+            "PartyAudio",  // Sound events, impact/loop emitters — see AI/design/audio.md
             "PhysicsCore", // UPhysicalMaterial — see AOctoPawn::ApplySurfaceMaterial
             "Water",       // AOctoBackgroundBoat samples the ocean surface
         });

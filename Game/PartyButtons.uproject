@@ -30,6 +30,10 @@
 		{
 			"Name": "AtrophyTools",
 			"Enabled": true
+		},
+		{
+			"Name": "PartyAudio",
+			"Enabled": true
 		}
 	]
 }

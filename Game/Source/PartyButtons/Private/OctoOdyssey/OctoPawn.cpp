@@ -16,6 +16,29 @@
 #include "Engine/HitResult.h"
 #include "WorldCollision.h"
 #include "CollisionQueryParams.h"
+#include "PartyAudioMath.h"
+#include "PartyAudioSubsystem.h"
+#include "PartyImpactAudioComponent.h"
+#include "PartyLoopAudioComponent.h"
+#include "PartySoundEvent.h"
+
+namespace
+{
+    // Where AI/build_audio_assets.py writes the events. Shared surface layers live
+    // outside OctoOdyssey/ because any game's props can land on wood.
+    TSoftObjectPtr<UPartySoundEvent> OctoEvent(const TCHAR* Name)
+    {
+        return TSoftObjectPtr<UPartySoundEvent>(FSoftObjectPath(FString::Printf(TEXT("/Game/OctoOdyssey/Audio/Events/%s.%s"), Name, Name)));
+    }
+
+    TSoftObjectPtr<UPartySoundEvent> SharedEvent(const TCHAR* Name)
+    {
+        return TSoftObjectPtr<UPartySoundEvent>(FSoftObjectPath(FString::Printf(TEXT("/Game/Audio/Events/%s.%s"), Name, Name)));
+    }
+
+    /** Planted arms that stop reporting blocking sweeps for longer than this have left the surface. */
+    constexpr float ArmUnstickGraceSeconds = 0.06f;
+}
 
 AOctoPawn::AOctoPawn()
 {
@@ -124,6 +147,40 @@ AOctoPawn::AOctoPawn()
             }
         }
         HandMeshes[i] = Hand;
+    }
+
+    // ---- Audio -------------------------------------------------------------
+    ImpactAudio = CreateDefaultSubobject<UPartyImpactAudioComponent>(TEXT("ImpactAudio"));
+
+    RollAudio = CreateDefaultSubobject<UPartyLoopAudioComponent>(TEXT("RollAudio"));
+    RollAudio->SetupAttachment(RootComponent);
+    // Picks up quickly as the octopus starts to roll, but lingers over the tiny
+    // hops a lumpy body makes, so rolling reads as one continuous sound.
+    RollAudio->AttackSeconds  = 0.06f;
+    RollAudio->ReleaseSeconds = 0.18f;
+
+    AirRushAudio = CreateDefaultSubobject<UPartyLoopAudioComponent>(TEXT("AirRushAudio"));
+    AirRushAudio->SetupAttachment(RootComponent);
+    AirRushAudio->AttackSeconds  = 0.15f;
+    AirRushAudio->ReleaseSeconds = 0.35f;
+
+    FleshImpactEvent = OctoEvent(TEXT("SE_Octo_ImpactFlesh"));
+    ArmPlantEvent    = OctoEvent(TEXT("SE_Octo_ArmPlant"));
+    ArmUnstickEvent  = OctoEvent(TEXT("SE_Octo_ArmUnstick"));
+    PushOffEvent     = OctoEvent(TEXT("SE_Octo_PushOff"));
+    RollLoopEvent    = OctoEvent(TEXT("SE_Octo_RollLoop"));
+    AirRushEvent     = OctoEvent(TEXT("SE_Octo_AirRush"));
+
+    // Surface types are named in DefaultEngine.ini [/Script/PhysicsCore.PhysicsSettings].
+    SurfaceImpactEvents.Add(SurfaceType1, SharedEvent(TEXT("SE_Surface_Wood")));
+    SurfaceImpactEvents.Add(SurfaceType2, SharedEvent(TEXT("SE_Surface_Stone")));
+    SurfaceImpactEvents.Add(SurfaceType3, SharedEvent(TEXT("SE_Surface_Sand")));
+    SurfaceImpactEvents.Add(SurfaceType4, SharedEvent(TEXT("SE_Surface_Metal")));
+    DefaultSurfaceImpactEvent = SharedEvent(TEXT("SE_Surface_Stone"));
+
+    for (int32 i = 0; i < OctoArm::NumArms; i++)
+    {
+        ArmSourceKeys[i] = FName(TEXT("OctoArm"), i + 1);
     }
 
     // Every size, offset and scale comes from Tuning — at this point the shipping
@@ -253,6 +310,7 @@ void AOctoPawn::BeginPlay()
 {
     Super::BeginPlay();
     ConfigureBodyPhysics();
+    ConfigureAudio();
 
     // Only now do the poseable mesh's bone arrays exist (AllocateTransformData runs
     // on registration), so this is the earliest the rig can be measured. A failure
@@ -522,6 +580,18 @@ void AOctoPawn::ResolveHeadCollision(const FVector& StartWorld)
     if (NormalSpeed < 0.f)
     {
         AddSquashImpulse(Normal, -NormalSpeed);
+
+        // The head is a visual-only spring, so it never reaches the body's hit
+        // events — without this, a head smacking a ceiling would be silent.
+        // Softer than a body hit: the head carries none of the body's mass.
+        const float Intensity = PartyAudio::NormalizeIntensity(-NormalSpeed, Tuning.AudioImpactMinSpeed, Tuning.AudioImpactMaxSpeed);
+        if (Intensity > 0.f)
+        {
+            if (UPartyAudioSubsystem* Audio = UPartyAudioSubsystem::Get(this))
+            {
+                Audio->PlayEvent(LoadedFleshImpact, Hit.ImpactPoint, Intensity * 0.7f, TEXT("OctoHead"), Tuning.AudioSfxVolume * 0.8f);
+            }
+        }
     }
 }
 
@@ -631,6 +701,7 @@ void AOctoPawn::ApplyLiveTuning(const FOctoTuning& NewTuning)
 
     ApplyBodyPhysicsTuning();
     ApplySurfaceMaterial();
+    ApplyAudioTuning();
 
     // Visibility is a render flag, not geometry — it touches no shape and no weld,
     // so unlike RebuildGeometry it can be previewed mid-round.
@@ -665,6 +736,11 @@ void AOctoPawn::SetPhysicsFrozen(bool bFrozen)
         BodySphere->SetPhysicsLinearVelocity(FVector::ZeroVector);
         BodySphere->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
 
+        // Tick early-outs while frozen, so the loops would hold whatever level they
+        // had at the freeze for the whole intro.
+        if (RollAudio)    { RollAudio->StopNow(); }
+        if (AirRushAudio) { AirRushAudio->StopNow(); }
+
         // Tick early-outs while frozen, so a head left mid-wobble would hang there for the
         // whole intro. Park it — "frozen" should look frozen.
         ResetBodySpring();
@@ -693,6 +769,7 @@ void AOctoPawn::Tick(float DeltaSeconds)
 
     TickArms(DeltaSeconds);
     TickBodySpring(DeltaSeconds);
+    TickAudioLoops();
 
     // One flush for every bone written this frame — marking dirty per writer would re-walk
     // the whole bone hierarchy nine times a frame for exactly the same result.
@@ -869,10 +946,12 @@ void AOctoPawn::TickArm(int32 ArmIndex, float DeltaSeconds, const FVector& Frame
     // and the push ends. Once the stroke runs out (EAchieved == SafeMax) the
     // fully-extended arm holds the body up as ordinary welded collision
     // geometry instead, which is why no separate "sustain force" exists.
+    float PlantStrength = 0.f;
     if (bBlocked && Arm.bPressed && EAchieved < SafeMax)
     {
         const FVector PushDir = -GetActorQuat().RotateVector(GetArmLocalDirection(ArmIndex));
         const float Deficit = OctoArm::PushOffSpeedDeficit(FrameStartVelocity, PushDir, Tuning.ExtendSpeed);
+        PlantStrength = Tuning.ExtendSpeed > 0.f ? FMath::Clamp(Deficit / Tuning.ExtendSpeed, 0.f, 1.f) : 0.f;
 
         if (Deficit > 0.f)
         {
@@ -910,6 +989,8 @@ void AOctoPawn::TickArm(int32 ArmIndex, float DeltaSeconds, const FVector& Frame
     }
 
     Arm.Extension = EAchieved;
+
+    UpdateArmContactAudio(ArmIndex, bBlocked, Hit, PlantStrength, EAchieved >= SafeMax - KINDA_SMALL_NUMBER, DeltaSeconds);
 }
 
 void AOctoPawn::ApplyArmColliderExtension(int32 ArmIndex, float Extension)
@@ -919,4 +1000,162 @@ void AOctoPawn::ApplyArmColliderExtension(int32 ArmIndex, float Extension)
     const float Offset = OctoArm::CapsuleCenterOffset(
         Tuning.SphereRadius, Tuning.ArmRadius, Tuning.ArmHalfHeight, Extension);
     ArmColliders[ArmIndex]->SetRelativeLocation(GetArmLocalDirection(ArmIndex) * Offset);
+}
+
+// ---- Audio -----------------------------------------------------------------
+
+USceneComponent* AOctoPawn::GetAudioFocus() const
+{
+    return BodySphere;
+}
+
+void AOctoPawn::ConfigureAudio()
+{
+    LoadedFleshImpact = FleshImpactEvent.LoadSynchronous();
+    LoadedArmPlant    = ArmPlantEvent.LoadSynchronous();
+    LoadedArmUnstick  = ArmUnstickEvent.LoadSynchronous();
+    LoadedPushOff     = PushOffEvent.LoadSynchronous();
+
+    if (ImpactAudio)
+    {
+        ImpactAudio->SetTarget(BodySphere);
+        // The octopus meets the world mostly through its arms, which are welded
+        // into BodySphere's body — without these, landings on the arms are silent.
+        for (UCapsuleComponent* Collider : ArmColliders)
+        {
+            ImpactAudio->AddTarget(Collider);
+        }
+        ImpactAudio->SelfEvent = LoadedFleshImpact;
+        ImpactAudio->DefaultSurfaceEvent = DefaultSurfaceImpactEvent.LoadSynchronous();
+        ImpactAudio->SurfaceEvents.Reset();
+        for (const TPair<TEnumAsByte<EPhysicalSurface>, TSoftObjectPtr<UPartySoundEvent>>& Pair : SurfaceImpactEvents)
+        {
+            if (UPartySoundEvent* Event = Pair.Value.LoadSynchronous())
+            {
+                ImpactAudio->SurfaceEvents.Add(Pair.Key, Event);
+            }
+        }
+    }
+    if (RollAudio)
+    {
+        RollAudio->Event = RollLoopEvent.LoadSynchronous();
+    }
+    if (AirRushAudio)
+    {
+        AirRushAudio->Event = AirRushEvent.LoadSynchronous();
+    }
+
+    UE_CLOG(!LoadedFleshImpact, LogPartyButtons, Warning,
+        TEXT("AOctoPawn: sound events not found (run AI/build_audio_assets.py) — the octopus will be silent."));
+
+    ApplyAudioTuning();
+}
+
+void AOctoPawn::ApplyAudioTuning()
+{
+    if (ImpactAudio)
+    {
+        ImpactAudio->SetImpactSpeedRange(Tuning.AudioImpactMinSpeed, Tuning.AudioImpactMaxSpeed);
+        // Same mass the squash uses, so "how hard" means the same thing to eye and ear.
+        ImpactAudio->MassOverrideKg   = Tuning.BodyMassKg;
+        ImpactAudio->VolumeMultiplier = Tuning.AudioSfxVolume;
+    }
+    if (RollAudio)    { RollAudio->VolumeMultiplier    = Tuning.AudioSfxVolume; }
+    if (AirRushAudio) { AirRushAudio->VolumeMultiplier = Tuning.AudioSfxVolume; }
+}
+
+void AOctoPawn::TickAudioLoops()
+{
+    if (!BodySphere || !BodySphere->IsSimulatingPhysics())
+    {
+        return;
+    }
+
+    const bool bGrounded = ImpactAudio && ImpactAudio->GetSecondsSinceContact() <= Tuning.AudioGroundedSeconds;
+
+    if (RollAudio)
+    {
+        // The body only rolls about X (DOF lock), so that component IS the roll.
+        // Times radius: the speed the surface moves past the contact point, which
+        // is what a rolling sound actually follows.
+        const float AngularRad = FMath::DegreesToRadians(static_cast<float>(FMath::Abs(BodySphere->GetPhysicsAngularVelocityInDegrees().X)));
+        const float SurfaceSpeed = AngularRad * Tuning.SphereRadius;
+        RollAudio->SetDrive(bGrounded ? PartyAudio::NormalizeIntensity(SurfaceSpeed, 0.f, Tuning.AudioRollMaxSpeed) : 0.f);
+    }
+
+    if (AirRushAudio)
+    {
+        const float Speed = static_cast<float>(BodySphere->GetPhysicsLinearVelocity().Size());
+        AirRushAudio->SetDrive(PartyAudio::NormalizeIntensity(Speed, Tuning.AudioAirRushMinSpeed, Tuning.AudioAirRushMaxSpeed));
+    }
+}
+
+FVector AOctoPawn::GetHandWorldLocation(int32 ArmIndex) const
+{
+    const float Offset = OctoArm::HandCenterOffset(Tuning.SphereRadius, Tuning.ArmRadius, Tuning.ArmHalfHeight, Arms[ArmIndex].Extension);
+    return GetActorLocation() + GetActorQuat().RotateVector(GetArmLocalDirection(ArmIndex)) * Offset;
+}
+
+void AOctoPawn::UpdateArmContactAudio(int32 ArmIndex, bool bBlocked, const FHitResult& Hit, float PlantStrength,
+                                      bool bAtFullExtension, float DeltaSeconds)
+{
+    FOctoArmState& Arm = Arms[ArmIndex];
+    UPartyAudioSubsystem* Audio = UPartyAudioSubsystem::Get(this);
+
+    if (bBlocked)
+    {
+        Arm.UnblockedSeconds = 0.f;
+        if (!Arm.bPlanted)
+        {
+            Arm.bPlanted = true;
+            if (Audio)
+            {
+                // Floor of 0.2: even an arm landing on a surface the body is already
+                // leaving makes contact you should hear.
+                const float Intensity = FMath::Max(0.2f, PlantStrength);
+                Audio->PlayEvent(LoadedArmPlant, Hit.ImpactPoint, Intensity, ArmSourceKeys[ArmIndex], Tuning.AudioSfxVolume);
+                if (PlantStrength >= Tuning.AudioPushOffThreshold)
+                {
+                    const float PushIntensity = PartyAudio::NormalizeIntensity(PlantStrength, Tuning.AudioPushOffThreshold, 1.f);
+                    Audio->PlayEvent(LoadedPushOff, GetActorLocation(), PushIntensity, TEXT("OctoPushOff"), Tuning.AudioSfxVolume);
+                }
+            }
+        }
+        return;
+    }
+
+    if (!Arm.bPlanted)
+    {
+        return;
+    }
+
+    // Planted and no longer blocked. Three ways that ends:
+    //  - released: the arm peels off whatever it was on;
+    //  - still extending but the sweeps found nothing for a moment: the body has
+    //    launched away from the surface and pulled the arm off it;
+    //  - fully extended: no sweep runs at all, but the arm is still resting on the
+    //    surface as ordinary collision, so it stays planted until it lets go.
+    bool bUnstick = false;
+    float Intensity = 0.5f;
+    if (!Arm.bPressed)
+    {
+        // Letting go only makes a sound if the arm is plausibly still on something.
+        bUnstick = !bAtFullExtension || (ImpactAudio && ImpactAudio->GetSecondsSinceContact() <= 0.25f);
+        Arm.bPlanted = false;
+    }
+    else if (!bAtFullExtension)
+    {
+        Arm.UnblockedSeconds += DeltaSeconds;
+        if (Arm.UnblockedSeconds > ArmUnstickGraceSeconds)
+        {
+            bUnstick = true;
+            Intensity = 0.35f;
+            Arm.bPlanted = false;
+        }
+    }
+
+    if (bUnstick && Audio)
+    {
+        Audio->PlayEvent(LoadedArmUnstick, GetHandWorldLocation(ArmIndex), Intensity, ArmSourceKeys[ArmIndex], Tuning.AudioSfxVolume);
+    }
 }

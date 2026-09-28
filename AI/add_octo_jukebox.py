@@ -37,6 +37,7 @@ MAP_PATH = "/Game/Maps/L_OctoOdyssey"
 OUTLINER_FOLDER = "Scene"
 JUKEBOX_LABEL = "JukeBox"
 JUKEBOX_CLASS_PATH = "/Script/PartyButtons.JukeBox"
+MUSIC_SOUND_CLASS = "/Game/Audio/Mix/SC_Music"
 
 # (track name, source WAV, content folder, asset name, starting volume)
 # The track name is what game code keys on — AOctoGameMode::MusicTrackName.
@@ -73,6 +74,9 @@ def import_sound(source, folder, asset_name):
 
     # The loop lives on the asset — AJukeBox never forces it (see FJukeBoxTrack::Sound).
     sound.set_editor_property("looping", True)
+    # Route through the mix tree AI/build_audio_assets.py builds, when it exists.
+    if unreal.EditorAssetLibrary.does_asset_exist(MUSIC_SOUND_CLASS):
+        sound.set_editor_property("sound_class_object", unreal.load_asset(MUSIC_SOUND_CLASS))
     unreal.EditorAssetLibrary.save_loaded_asset(sound, only_if_is_dirty=False)
     print(f"Imported {os.path.basename(source)} -> {path} (looping, {sound.get_editor_property('duration'):.2f}s).")
     return sound

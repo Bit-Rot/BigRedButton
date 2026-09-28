@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
 #include "Containers/StaticArray.h"
+#include "Chaos/ChaosEngineInterface.h" // EPhysicalSurface
 #include "OctoOdyssey/OctoArmMath.h"
 #include "OctoOdyssey/OctoBodySpring.h"
 #include "OctoOdyssey/OctoSkeleton.h"
@@ -15,6 +16,9 @@ class UPrimitiveComponent;
 class UStaticMeshComponent;
 class UPoseableMeshComponent;
 class UPhysicalMaterial;
+class UPartyImpactAudioComponent;
+class UPartyLoopAudioComponent;
+class UPartySoundEvent;
 
 /**
  * AOctoPawn
@@ -141,6 +145,9 @@ public:
      */
     void ApplyLiveTuning(const FOctoTuning& NewTuning);
 
+    /** The component the listener should measure distance from — see UPartyAudioSubsystem::SetAttenuationFocus. */
+    USceneComponent* GetAudioFocus() const;
+
     /** The values this pawn was built with. Read-only outside ApplyLiveTuning. */
     const FOctoTuning& GetTuning() const { return Tuning; }
 
@@ -163,11 +170,57 @@ protected:
     UPROPERTY(EditDefaultsOnly, Category = "Octo")
     FOctoTuning Tuning;
 
+    // ---- Audio ------------------------------------------------------------
+    //
+    // Soft references with default paths set in the constructor, resolved in
+    // BeginPlay: the assets are written by AI/build_audio_assets.py, and a
+    // missing one must mean "silent", not a constructor load error. What each
+    // event sounds like is authored on the event; when it fires, and how hard,
+    // is decided here from the physics.
+
+    /** What the octopus sounds like hitting anything: wet flesh. Also the head's impacts, quieter. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Audio")
+    TSoftObjectPtr<UPartySoundEvent> FleshImpactEvent;
+
+    /** What the octopus hit, by surface type (the Wood/Stone/Sand/Metal types in DefaultEngine.ini). */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Audio")
+    TMap<TEnumAsByte<EPhysicalSurface>, TSoftObjectPtr<UPartySoundEvent>> SurfaceImpactEvents;
+
+    /** Surface layer for anything without a surface type. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Audio")
+    TSoftObjectPtr<UPartySoundEvent> DefaultSurfaceImpactEvent;
+
+    /** An arm landing on a surface: a soft wet suction. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Audio")
+    TSoftObjectPtr<UPartySoundEvent> ArmPlantEvent;
+
+    /** An arm leaving a surface it was stuck to: a suction pop. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Audio")
+    TSoftObjectPtr<UPartySoundEvent> ArmUnstickEvent;
+
+    /** A hard push-off: the low body "whumpf" layered on a strong plant. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Audio")
+    TSoftObjectPtr<UPartySoundEvent> PushOffEvent;
+
+    /** Rolling on the ground, driven by surface speed. Must be a looping sound. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Audio")
+    TSoftObjectPtr<UPartySoundEvent> RollLoopEvent;
+
+    /** Wind past the body, driven by airspeed. Must be a looping sound. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Audio")
+    TSoftObjectPtr<UPartySoundEvent> AirRushEvent;
+
 private:
     struct FOctoArmState
     {
         bool  bPressed  = false;
         float Extension = 0.f;
+
+        /** Stuck to a surface — set on the first blocked sweep, cleared when the arm lets go. Drives plant/unstick sounds. */
+        bool  bPlanted  = false;
+
+        /** How long a planted, still-extending arm has gone without a blocking sweep. */
+        float UnblockedSeconds = 0.f;
     };
 
     /** One arm's push-off for this frame, applied by TickArms after every arm has been stepped. */
@@ -273,6 +326,25 @@ private:
      */
     void ApplyMeshVisibility();
 
+    /** Resolve the audio soft references and hand them to the audio components. */
+    void ConfigureAudio();
+
+    /** Push Tuning's audio ranges and volume into the audio components. */
+    void ApplyAudioTuning();
+
+    /** Drive the roll and air-rush loops from this frame's body motion. */
+    void TickAudioLoops();
+
+    /**
+     * Plant/unstick edge detection for one arm, called from TickArm with this frame's
+     * sweep result. PlantStrength is the push-off deficit over ExtendSpeed (0..1).
+     */
+    void UpdateArmContactAudio(int32 ArmIndex, bool bBlocked, const FHitResult& Hit, float PlantStrength,
+                               bool bAtFullExtension, float DeltaSeconds);
+
+    /** World position of arm ArmIndex's hand at its current extension. */
+    FVector GetHandWorldLocation(int32 ArmIndex) const;
+
     /** Body-local direction of arm ArmIndex (X always 0) — see OctoArm::ArmDirectionLocal. */
     FVector GetArmLocalDirection(int32 ArmIndex) const;
 
@@ -346,6 +418,32 @@ private:
 
     /** Component-space normal of the impact currently being squashed along. */
     FVector SquashNormalCS = FVector::ZAxisVector;
+
+    /** Body impacts: flesh layer + what-was-hit layer, and the "grounded" contact sensor. */
+    UPROPERTY(VisibleAnywhere, Category = "Octo|Audio")
+    TObjectPtr<UPartyImpactAudioComponent> ImpactAudio;
+
+    UPROPERTY(VisibleAnywhere, Category = "Octo|Audio")
+    TObjectPtr<UPartyLoopAudioComponent> RollAudio;
+
+    UPROPERTY(VisibleAnywhere, Category = "Octo|Audio")
+    TObjectPtr<UPartyLoopAudioComponent> AirRushAudio;
+
+    /** Resolved in ConfigureAudio. */
+    UPROPERTY(Transient)
+    TObjectPtr<UPartySoundEvent> LoadedFleshImpact;
+
+    UPROPERTY(Transient)
+    TObjectPtr<UPartySoundEvent> LoadedArmPlant;
+
+    UPROPERTY(Transient)
+    TObjectPtr<UPartySoundEvent> LoadedArmUnstick;
+
+    UPROPERTY(Transient)
+    TObjectPtr<UPartySoundEvent> LoadedPushOff;
+
+    /** Per-arm source keys, so each arm has its own cooldown and shuffle bag. */
+    TStaticArray<FName, OctoArm::NumArms> ArmSourceKeys;
 
     /** True while the intro overlay has the round paused — see SetPhysicsFrozen. */
     bool bPhysicsFrozen = false;

@@ -26,6 +26,7 @@ level, rules and scoring:
 - Build/test/run commands: `AI/reference/autonomous-validation.md`
 - Hardware-gated steps: `AI/deferred-manual-work.md`
 - Texture/material generation (RTX Remix I2M CLI): `AI/reference/rtx-remix-texture-gen.md`
+- Audio (PartyAudio plugin, sound events, content pipeline): `AI/design/audio.md`
 
 ## Project layout
 
@@ -35,6 +36,7 @@ Game/                     UE 5.7 test project (PartyButtons.uproject)
   Config/OctoTuning.ini   OctoOdyssey game-feel overrides (written by the Tab dev menu)
   Config/OctoScores.ini   OctoOdyssey top-ten tables (written on every name entry)
   Plugins/PartyInput/     THE REUSABLE PLUGIN — this is the deliverable
+  Plugins/PartyAudio/     Sound events + impact/loop/scatter emitters, shared by every game
   Plugins/AtrophyTools/   Blockout tools: AAtrophyTileMeshActor (tiles a cube mesh over an
                           X/Y/Z volume) + editor face-handle visualizer. Runtime + Editor modules.
   Source/PartyButtons/    Demo glue: GameMode + HUD

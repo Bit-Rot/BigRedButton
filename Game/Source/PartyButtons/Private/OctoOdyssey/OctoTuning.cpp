@@ -120,6 +120,16 @@ TArrayView<const FOctoTuningParam> OctoTuning::GetParams()
         // name any island in the level.
         FloatParam(TEXT("PlayPlaneX"),             TEXT("Course"),   &FOctoTuning::PlayPlaneX,          -8000.f, 2000.f, 50.f, true),
         FloatParam(TEXT("TutorialMaxSeconds"),     TEXT("Course"),   &FOctoTuning::TutorialMaxSeconds,      0.f,   15.f,  0.5f, true),
+
+        // ---- Audio ---------------------------------------------------------
+        FloatParam(TEXT("AudioSfxVolume"),         TEXT("Audio"),    &FOctoTuning::AudioSfxVolume,          0.f,    2.f,  0.05f),
+        FloatParam(TEXT("AudioImpactMinSpeed"),    TEXT("Audio"),    &FOctoTuning::AudioImpactMinSpeed,     0.f,  800.f, 10.f),
+        FloatParam(TEXT("AudioImpactMaxSpeed"),    TEXT("Audio"),    &FOctoTuning::AudioImpactMaxSpeed,   100.f, 4000.f, 50.f),
+        FloatParam(TEXT("AudioRollMaxSpeed"),      TEXT("Audio"),    &FOctoTuning::AudioRollMaxSpeed,      50.f, 3000.f, 25.f),
+        FloatParam(TEXT("AudioGroundedSeconds"),   TEXT("Audio"),    &FOctoTuning::AudioGroundedSeconds,    0.02f,  1.f,  0.02f),
+        FloatParam(TEXT("AudioAirRushMinSpeed"),   TEXT("Audio"),    &FOctoTuning::AudioAirRushMinSpeed,    0.f, 4000.f, 50.f),
+        FloatParam(TEXT("AudioAirRushMaxSpeed"),   TEXT("Audio"),    &FOctoTuning::AudioAirRushMaxSpeed,  100.f, 5000.f, 50.f),
+        FloatParam(TEXT("AudioPushOffThreshold"),  TEXT("Audio"),    &FOctoTuning::AudioPushOffThreshold,   0.f,    1.f,  0.05f),
     };
 
     return Params;

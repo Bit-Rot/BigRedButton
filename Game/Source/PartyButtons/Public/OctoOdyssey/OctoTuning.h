@@ -378,6 +378,44 @@ struct PARTYBUTTONS_API FOctoTuning
     /** Tutorial auto-dismiss deadline (APartyMinigameGameMode::TutorialMaxSeconds). */
     UPROPERTY(EditDefaultsOnly, Category = "Octo|Course")
     float TutorialMaxSeconds = 5.f;
+
+    // ---- Audio ------------------------------------------------------------
+    //
+    // How the octopus's physics drives its sound. The sounds themselves (which
+    // recordings, how loud, how bright) live on the UPartySoundEvent assets —
+    // these are only the physical ranges that map onto their 0..1 intensity.
+
+    /** Overall level of every sound the octopus makes. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Audio")
+    float AudioSfxVolume = 1.f;
+
+    /** Body speed change (cm/s) below which an impact is silent. Raise it if resting contact chatters. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Audio")
+    float AudioImpactMinSpeed = 80.f;
+
+    /** Body speed change (cm/s) that counts as the hardest possible hit. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Audio")
+    float AudioImpactMaxSpeed = 1400.f;
+
+    /** Rolling surface speed (|angular speed| x radius, cm/s) that drives the roll loop to full. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Audio")
+    float AudioRollMaxSpeed = 500.f;
+
+    /** A body hit within this many seconds counts as "on the ground" for the roll loop. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Audio")
+    float AudioGroundedSeconds = 0.12f;
+
+    /** Body speed (cm/s) at which air rush starts to be heard. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Audio")
+    float AudioAirRushMinSpeed = 700.f;
+
+    /** Body speed (cm/s) at which air rush is at full. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Audio")
+    float AudioAirRushMaxSpeed = 2000.f;
+
+    /** Arm plant strength (push-off deficit / ExtendSpeed) above which the body "whumpf" layer plays. */
+    UPROPERTY(EditDefaultsOnly, Category = "Octo|Audio")
+    float AudioPushOffThreshold = 0.45f;
 };
 
 /** Which member of FOctoTuning a descriptor row points at. */

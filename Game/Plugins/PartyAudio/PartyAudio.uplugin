@@ -1,0 +1,24 @@
+{
+    "FileVersion": 3,
+    "Version": 1,
+    "VersionName": "1.0",
+    "FriendlyName": "PartyAudio",
+    "Description": "Data-driven sound events for the party games: variation, intensity-driven volume/pitch/filtering, surface-aware impacts, drive-controlled loops and randomised ambience emitters. Gameplay fires events; the event asset decides what plays.",
+    "Category": "Audio",
+    "CreatedBy": "Andrew Black",
+    "CreatedByURL": "",
+    "DocsURL": "",
+    "MarketplaceURL": "",
+    "SupportURL": "",
+    "CanContainContent": false,
+    "IsBetaVersion": false,
+    "IsExperimentalVersion": false,
+    "Installed": false,
+    "Modules": [
+        {
+            "Name": "PartyAudio",
+            "Type": "Runtime",
+            "LoadingPhase": "Default"
+        }
+    ]
+}
