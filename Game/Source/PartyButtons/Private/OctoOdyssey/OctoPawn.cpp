@@ -7,6 +7,8 @@
 #include "Components/PoseableMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "PhysicsEngine/BodyInstance.h"
+#include "PhysicsProxy/SingleParticlePhysicsProxy.h"
+#include "Chaos/Utilities.h"
 #include "PhysicalMaterials/PhysicalMaterial.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -43,6 +45,7 @@ namespace
 AOctoPawn::AOctoPawn()
 {
     PrimaryActorTick.bCanEverTick = true;
+    bAsyncPhysicsTickEnabled = true; // the arm push-off runs per physics step — see AsyncPhysicsTickActor
     AutoPossessPlayer = EAutoReceiveInput::Disabled; // never possessed — see class comment
     AutoPossessAI     = EAutoPossessAI::Disabled;
 
@@ -804,54 +807,97 @@ FRotator AOctoPawn::GetArmRelativeRotation(int32 ArmIndex) const
 
 void AOctoPawn::TickArms(float DeltaSeconds)
 {
-    // Every arm's push-off is measured against the SAME frame-start velocity,
-    // and none is applied until all eight have been stepped. Applying them as
-    // they're found would make the result depend on arm order: an octopus
-    // wedged in a gap with two opposing arms planted would see each arm in turn
-    // "correct" the velocity the other just set, and buzz. Batched, opposing
-    // pushes cancel — which is right, since a wedged octopus shouldn't move.
+    // Only used for the audio's PlantStrength; the push itself is computed against the
+    // solver's velocity in AsyncPhysicsTickActor.
     const FVector FrameStartVelocity = BodySphere->GetPhysicsLinearVelocity();
-
-    TArray<FPendingPush> Pushes;
-    Pushes.Reserve(OctoArm::NumArms);
 
     for (int32 i = 0; i < OctoArm::NumArms; i++)
     {
-        TickArm(i, DeltaSeconds, FrameStartVelocity, Pushes);
+        TickArm(i, DeltaSeconds, FrameStartVelocity);
     }
 
     // The pose is NOT flushed here — Tick does it once after TickBodySpring has written
     // the head chain too.
-
-    if (Pushes.IsEmpty()) { return; }
-
-    for (const FPendingPush& Push : Pushes)
-    {
-        if (Tuning.bPushAtImpactPoint)
-        {
-            BodySphere->AddImpulseAtLocation(Push.Impulse, Push.Location);
-        }
-        else
-        {
-            // Through the centre of mass: no torque, so a corner push launches
-            // cleanly instead of tumbling the body.
-            BodySphere->AddImpulse(Push.Impulse);
-        }
-    }
-
-    BodySphere->SetPhysicsLinearVelocity(
-        OctoArm::ClampLaunchVelocity(BodySphere->GetPhysicsLinearVelocity(), Tuning.MaxLaunchSpeed));
-
-    // Angular counterpart. Off-centre pushes are the whole reason the octopus
-    // tumbles, and AngularDamping alone takes seconds to bleed a hard spin off.
-    if (Tuning.MaxAngularSpeedDeg > 0.f)
-    {
-        BodySphere->SetPhysicsAngularVelocityInDegrees(
-            OctoArm::ClampLaunchVelocity(BodySphere->GetPhysicsAngularVelocityInDegrees(), Tuning.MaxAngularSpeedDeg));
-    }
 }
 
-void AOctoPawn::TickArm(int32 ArmIndex, float DeltaSeconds, const FVector& FrameStartVelocity, TArray<FPendingPush>& OutPushes)
+void AOctoPawn::AsyncPhysicsTickActor(float DeltaTime, float SimTime)
+{
+    Super::AsyncPhysicsTickActor(DeltaTime, SimTime);
+
+    if (bPhysicsFrozen || !BodySphere) { return; }
+
+    FBodyInstanceAsyncPhysicsTickHandle Body = BodySphere->GetBodyInstanceAsyncPhysicsTickHandle();
+    if (!Body) { return; }
+
+    // Every arm's push-off is measured against the SAME step-start velocity, and none is
+    // applied until all eight have been summed. Applying them as they're found would make
+    // the result depend on arm order: an octopus wedged in a gap with two opposing arms
+    // planted would see each arm in turn "correct" the velocity the other just set, and
+    // buzz. Summed, opposing pushes cancel — which is right, since a wedged octopus
+    // shouldn't move.
+    const FVector V = Body->V();
+    const FVector WorldCoM = Body->X() + Body->R().RotateVector(Body->CenterOfMass());
+
+    FVector DeltaV = FVector::ZeroVector;
+    FVector AngularImpulse = FVector::ZeroVector;
+    bool bAnyPush = false;
+
+    for (const FOctoArmState& Arm : Arms)
+    {
+        if (!Arm.bPushing) { continue; }
+
+        // Scaling the impulse by mass is what makes the launch depend on arm SPEED alone:
+        // dV = J/m and dW = I^-1 (r x J) with J proportional to m and I proportional to m,
+        // so mass cancels from both. Retuning BodyMassKg changes how the octopus takes
+        // hits without touching how high it flies. The impact point (rather than the
+        // centre of mass) is the default: it's what makes a corner push tumble the body —
+        // see FOctoTuning::bPushAtImpactPoint.
+        const float Deficit = OctoArm::PushOffSpeedDeficit(V, Arm.PushDir, Tuning.ExtendSpeed);
+        FVector Impulse = Arm.PushDir * (Deficit * Tuning.BodyMassKg);
+
+        // Grip: PushOffSpeedDeficit only ever adds speed ALONG the arm, which on its own
+        // makes pushing off feel slippery. Contact friction can't take up the slack — a
+        // planted arm's collider is teleported by ApplyArmColliderExtension, so Chaos
+        // sees a moved shape with no shape velocity. So bleed off the velocity
+        // perpendicular to the arm directly.
+        if (Tuning.ArmGripFraction > 0.f)
+        {
+            Impulse -= FVector::VectorPlaneProject(V, Arm.PushDir) * (Tuning.ArmGripFraction * Tuning.BodyMassKg);
+        }
+
+        if (Impulse.IsNearlyZero()) { continue; }
+
+        bAnyPush = true;
+        DeltaV += Impulse / Tuning.BodyMassKg;
+        if (Tuning.bPushAtImpactPoint)
+        {
+            AngularImpulse += (Arm.PushPoint - WorldCoM) ^ Impulse;
+        }
+    }
+
+    if (!bAnyPush) { return; }
+
+    // A body that has gone to sleep under a planted arm still has to be launched.
+    if (Body->ObjectState() == Chaos::EObjectStateType::Sleeping)
+    {
+        Body->SetObjectState(Chaos::EObjectStateType::Dynamic);
+    }
+
+    Body->SetV(OctoArm::ClampLaunchVelocity(V + DeltaV, Tuning.MaxLaunchSpeed));
+
+    // Angular counterpart. Off-centre pushes are the whole reason the octopus tumbles,
+    // and AngularDamping alone takes seconds to bleed a hard spin off. Chaos angular
+    // velocity is in radians.
+    const Chaos::FMatrix33 WorldInvI = Chaos::Utilities::ComputeWorldSpaceInertia(Body->R() * Body->RotationOfMass(), Body->InvI());
+    FVector W = Body->W() + WorldInvI * AngularImpulse;
+    if (Tuning.MaxAngularSpeedDeg > 0.f)
+    {
+        W = OctoArm::ClampLaunchVelocity(W, FMath::DegreesToRadians(Tuning.MaxAngularSpeedDeg));
+    }
+    Body->SetW(W);
+}
+
+void AOctoPawn::TickArm(int32 ArmIndex, float DeltaSeconds, const FVector& FrameStartVelocity)
 {
     FOctoArmState& Arm = Arms[ArmIndex];
 
@@ -947,45 +993,15 @@ void AOctoPawn::TickArm(int32 ArmIndex, float DeltaSeconds, const FVector& Frame
     // fully-extended arm holds the body up as ordinary welded collision
     // geometry instead, which is why no separate "sustain force" exists.
     float PlantStrength = 0.f;
-    if (bBlocked && Arm.bPressed && EAchieved < SafeMax)
+    Arm.bPushing = bBlocked && Arm.bPressed && EAchieved < SafeMax;
+    if (Arm.bPushing)
     {
-        const FVector PushDir = -GetActorQuat().RotateVector(GetArmLocalDirection(ArmIndex));
-        const float Deficit = OctoArm::PushOffSpeedDeficit(FrameStartVelocity, PushDir, Tuning.ExtendSpeed);
+        Arm.PushDir   = -GetActorQuat().RotateVector(GetArmLocalDirection(ArmIndex));
+        Arm.PushPoint = Hit.ImpactPoint;
+
+        // Audio only: how far the body was from the arm's speed this frame.
+        const float Deficit = OctoArm::PushOffSpeedDeficit(FrameStartVelocity, Arm.PushDir, Tuning.ExtendSpeed);
         PlantStrength = Tuning.ExtendSpeed > 0.f ? FMath::Clamp(Deficit / Tuning.ExtendSpeed, 0.f, 1.f) : 0.f;
-
-        if (Deficit > 0.f)
-        {
-            // Scaling the impulse by mass is what makes the launch depend on
-            // arm SPEED alone. AddImpulseAtLocation gives dV = J/m and
-            // dW = I^-1 (r x J); with J proportional to m and I proportional
-            // to m, mass cancels from both — so retuning BodyMassKg changes how
-            // the octopus takes hits without touching how high it flies. The
-            // impact point (rather than the centre of mass) is the default:
-            // it's what makes a corner push tumble the body — see
-            // FOctoTuning::bPushAtImpactPoint.
-            OutPushes.Add({ PushDir * (Deficit * Tuning.BodyMassKg), Hit.ImpactPoint });
-        }
-
-        // ---- Grip: the friction the push-off cannot provide ----
-        //
-        // PushOffSpeedDeficit only ever adds speed ALONG the arm and leaves
-        // motion across the contact untouched, which is what makes pushing off
-        // feel slippery. Contact friction can't take up the slack either: a
-        // planted arm's collider is teleported by ApplyArmColliderExtension, so
-        // Chaos sees a moved shape carrying no shape velocity and the tangential
-        // constraint has almost nothing to bite on during the stroke.
-        //
-        // So model it directly — bleed off the velocity perpendicular to the
-        // arm while it's planted. Batched into OutPushes with everything else so
-        // opposing arms still cancel rather than fight (see TickArms).
-        if (Tuning.ArmGripFraction > 0.f)
-        {
-            const FVector Tangential = FVector::VectorPlaneProject(FrameStartVelocity, PushDir);
-            if (!Tangential.IsNearlyZero())
-            {
-                OutPushes.Add({ -Tangential * (Tuning.ArmGripFraction * Tuning.BodyMassKg), Hit.ImpactPoint });
-            }
-        }
     }
 
     Arm.Extension = EAchieved;

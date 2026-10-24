@@ -156,6 +156,17 @@ protected:
     virtual void Tick(float DeltaSeconds) override;
 
     /**
+     * Applies every planted arm's push-off (and grip) once per PHYSICS step.
+     *
+     * The push is sized as "bring the body up to ExtendSpeed along the arm", which is only
+     * right if the velocity it reads already contains the previous push. The game-thread
+     * velocity doesn't until the solver has stepped, so pushing from Tick stacked one full
+     * push per rendered frame between steps and launch height scaled with framerate. Here
+     * the velocity is the solver's own, so the result is the same at any framerate.
+     */
+    virtual void AsyncPhysicsTickActor(float DeltaTime, float SimTime) override;
+
+    /**
      * Pulls the live tuning from UOctoTuningSubsystem (if there is one) and bakes
      * its geometry into the components. Runs before component registration, which
      * is the only safe window for that — see the class comment.
@@ -221,13 +232,15 @@ private:
 
         /** How long a planted, still-extending arm has gone without a blocking sweep. */
         float UnblockedSeconds = 0.f;
-    };
 
-    /** One arm's push-off for this frame, applied by TickArms after every arm has been stepped. */
-    struct FPendingPush
-    {
-        FVector Impulse;
-        FVector Location;
+        /**
+         * Latched by TickArm each game frame, consumed by AsyncPhysicsTickActor on every
+         * physics step until the next frame overwrites it. The game thread is frozen while
+         * the async tick runs, so plain reads are safe.
+         */
+        bool    bPushing  = false;
+        FVector PushDir   = FVector::ZeroVector;
+        FVector PushPoint = FVector::ZeroVector;
     };
 
     void TickArms(float DeltaSeconds);
@@ -270,12 +283,11 @@ private:
                    FVector NormalImpulse, const FHitResult& Hit);
 
     /**
-     * Steps one arm and, if it is planted against something, appends this
-     * frame's push-off to OutPushes. Never touches the body's velocity itself —
-     * see TickArms for why every arm's push must be computed against the same
-     * frame-start velocity.
+     * Steps one arm and, if it is planted against something, latches its push-off
+     * on the arm's state for AsyncPhysicsTickActor. Never touches the body's velocity
+     * itself. FrameStartVelocity is only used for the audio's PlantStrength.
      */
-    void TickArm(int32 ArmIndex, float DeltaSeconds, const FVector& FrameStartVelocity, TArray<FPendingPush>& OutPushes);
+    void TickArm(int32 ArmIndex, float DeltaSeconds, const FVector& FrameStartVelocity);
 
     /** One-time BeginPlay setup: the DOF lock, then everything ApplyLiveTuning also does. */
     void ConfigureBodyPhysics();
